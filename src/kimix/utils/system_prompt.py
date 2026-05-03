@@ -8,14 +8,7 @@ from kimi_cli.soul.agent import BuiltinSystemPromptArgs
 
 # This system prompt is designed to stop the modern LLM from over thinking and hallucination
 _SYSTEM_PROMP = (
-    '{AGENT_ROLE}.\n{RULES}\n{NOTE}\n{NUMBERED}{AGENTS_MD}{SKILLS}\n'
-)
-
-_NOTE = (
-    'Note:\n'
-    '1. For long tasks, use `Run` with `run_in_background=true`, then manage via '
-    '`TaskList`, `TaskOutput`, `Input`. Return control immediately after starting.\n'
-    '2. For complex or multi-step tasks, use `SetTodoList` to track progress.'
+    '{AGENT_ROLE}.\n{NUMBERED}\n{AGENTS_MD}\n{SKILLS}\n'
 )
 
 class SystemPromptType(Enum):
@@ -37,20 +30,24 @@ def get_system_prompt(
 
     def system_prompt_func(args: BuiltinSystemPromptArgs) -> str:
         items: list[str] = []
-        rules: str | None = None
-        note_doc = ''
         agent_md_doc = ''
         skill_doc = ''
 
         match agent_role:
             case SystemPromptType.Worker:
-                rules = (
-                    'Rules: Direct output only. No chain-of-thought. No analysis. '
+                items.append(
+                    'Direct output only. No chain-of-thought. No analysis. '
                     'No step-by-step. No reasoning blocks. No thinking-effort. zero preamble. '
                     'No postamble. Minimal explanation. Concisely. Shortly.'
                 )
                 role_doc = 'You are a terse ' + ('sub-agent' if is_sub_agent else 'coder')
-                note_doc = _NOTE
+                items.append(
+                    'For long tasks, use `Run` with `run_in_background=true`, then manage via '
+                    '`TaskList`, `TaskOutput`, `Input`. Return control immediately after starting.'
+                )
+                items.append(
+                    'For complex or multi-step tasks, use `SetTodoList` to track progress.'
+                )
                 if not is_sub_agent:
                     items.append(
                         'Use `Agent` for: "parallelizable independent subtasks", '
@@ -60,18 +57,19 @@ def get_system_prompt(
                     items.append('Run Python: `python -c <code>`.')
                 if not args.KIMI_OS == 'Windows':
                     items.append(f'Bash Shell: {args.KIMI_SHELL}. use `Run`')
-                start_index = 3
                 if yolo:
                     items.append(
                         'Yolo mode: act without asking. Stay in workdir. No system changes unless asked.'
                     )
+                items.append('Use `Remember`, `Recall` tools to manage knowledge and memory.')
+                start_index = 1
             case SystemPromptType.TodoMaker:
                 role_doc = '''You are a plan maker. Only make plan, never implement.
 Record all steps using `Note` tool.
 No multiple steps at once.
 '''
-                rules = (
-                    'Rules: Direct output only. No chain-of-thought. No analysis. '
+                items.append(
+                    'Direct output only. No chain-of-thought. No analysis. '
                     'No reasoning blocks. No thinking-effort. zero preamble. '
                     'No postamble. Minimal explanation. Concisely. Shortly.'
                 )
@@ -84,8 +82,8 @@ No multiple steps at once.
                     'Keep graph acyclic. Minimize edges to maximize parallelism.\n'
                     'Report all nodes and edges when done.\n\n'
                 )
-                rules = (
-                    'Rules: Direct output only. No chain-of-thought. No analysis. '
+                items.append(
+                    'Direct output only. No chain-of-thought. No analysis. '
                     'No reasoning blocks. No thinking-effort. zero preamble. '
                     'No postamble. Minimal explanation. Concisely. Shortly.'
                 )
@@ -98,15 +96,14 @@ No multiple steps at once.
         items.append('Use `SkillRag` tool to search and retrieve skills.')
         if args.KIMI_SKILLS:
             skill_doc = f'Skills:\n{args.KIMI_SKILLS}\n'
-
-        numbered_block = ''.join(
-            f'{i + start_index}. {item}\n' for i, item in enumerate(items)
-        )
+        numbered_block = ''
+        if items:
+            numbered_block = 'Rules:\n' + ''.join(
+                f'{i + start_index}. {item}\n' for i, item in enumerate(items)
+            )
 
         return _SYSTEM_PROMP.format(
             AGENT_ROLE=role_doc.strip(),
-            RULES=rules.strip() if rules else '',
-            NOTE=note_doc,
             NUMBERED=numbered_block,
             AGENTS_MD=agent_md_doc,
             SKILLS=skill_doc,
