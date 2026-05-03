@@ -11,6 +11,8 @@ kimix
 python -m kimix
 ```
 
+注意！这个仓库不止支持 KIMI LLM，支持各类 API Key !!! 各类默认 config 模板在 `docs/`, 配置后通过 `kimix --config xx.json` 即可使用 !
+
 ![teasor](teasor.png)
 ## 为什么选择 Kimi-CLI-X？
 

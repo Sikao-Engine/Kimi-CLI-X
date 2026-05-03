@@ -1,13 +1,12 @@
 {
     "model_name": "my-model",
     "name": "my-name",
-    "model": "minimax-m2.7",
+    "model": "gemini-2.5-pro",
     "max_context_size": 200000,
     "capabilities": ["thinking"],
-    "url": "https://api.minimaxi.com/anthropic",
-    "type": "anthropic",
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+    "type": "gemini",
     "api_key": "sk-xxx",
-    "env": {},
     "custom_headers": {},
     "oauth": {
         "storage": "file",
@@ -20,8 +19,11 @@
         "reserved_context_size": 50000,
         "compaction_trigger_ratio": 0.85
     },
+    "env": {
+        "GOOGLE_API_KEY": "sk-xxx"
+    },
     "max_tokens": 65536,
-    "thinking_effort": "max",
+    "thinking_effort": "HIGH",
     "show_thinking_stream": true,
     "temperature": 0.7,
     "top_p": 0.9,

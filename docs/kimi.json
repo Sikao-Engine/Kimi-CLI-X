@@ -1,0 +1,51 @@
+{
+    "model_name": "my-model",
+    "name": "my-name",
+    "model": "kimi-k2.6",
+    "max_context_size": 200000,
+    "capabilities": ["thinking"],
+    "url": "https://api.moonshot.cn/v1/chat/completions",
+    "type": "kimi",
+    "api_key": "sk-xxx",
+    "custom_headers": {},
+    "oauth": {
+        "storage": "file",
+        "key": "my-key"
+    },
+    "loop_control": {
+        "max_steps_per_turn": 5000,
+        "max_retries_per_step": 3,
+        "max_ralph_iterations": 0,
+        "reserved_context_size": 50000,
+        "compaction_trigger_ratio": 0.85
+    },
+    "env": {},
+    "max_tokens": 65536,
+    "thinking_effort": "max",
+    "show_thinking_stream": true,
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "top_k": 50,
+    "notifications": {
+        "enabled": true,
+        "sound": true,
+        "desktop": true
+    },
+    "mcp": {
+        "enabled": true,
+        "servers": []
+    },
+    "background": {
+        "max_running_tasks": 4,
+        "read_max_bytes": 30000,
+        "notification_tail_lines": 20,
+        "notification_tail_chars": 3000,
+        "wait_poll_interval_ms": 500,
+        "worker_heartbeat_interval_ms": 5000,
+        "worker_stale_after_ms": 15000,
+        "kill_grace_period_ms": 2000,
+        "keep_alive_on_exit": false,
+        "agent_task_timeout_s": 900,
+        "print_wait_ceiling_s": 3600
+    }
+}

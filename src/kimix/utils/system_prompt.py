@@ -55,13 +55,15 @@ def get_system_prompt(
                         '"permission-graded operations like read-only analysis or sandboxed execution".'
                     )
                     items.append('Run Python: `python -c <code>`.')
-                if not args.KIMI_OS == 'Windows':
+                if args.KIMI_OS != 'Windows':
                     items.append(f'Bash Shell: {args.KIMI_SHELL}. use `Run`')
                 if yolo:
                     items.append(
                         'Yolo mode: act without asking. Stay in workdir. No system changes unless asked.'
                     )
-                items.append('Use `Remember`, `Recall`, `GetContext`, `Reflect`, `AddScar`, `AddRule` tools to manage knowledge and memory.')
+                items.append('Use `Remember`, `Recall` tools to manage knowledge and memory.')
+                items.append('Use `AddScar` to record failures and avoid repeating them.')
+                items.append('Use `AddRule` to add operational decision rules to procedural memory.')
                 start_index = 1
             case SystemPromptType.TodoMaker:
                 role_doc = '''You are a plan maker. Only make plan, never implement.

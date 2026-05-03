@@ -1,0 +1,83 @@
+{
+    "model_name": "my-model",
+    "name": "my-name",
+    "model": "gemini-2.5-pro",
+    "max_context_size": 200000,
+    "capabilities": ["thinking"],
+    "url": "https://{REGION}-aiplatform.googleapis.com/v1/projects/{PROJECT_ID}/locations/{REGION}/publishers/google/models/gemini-2.5-pro:generateContent",
+    "type": "vertexai",
+    "api_key": "sk-xxx",
+    "custom_headers": {},
+    "oauth": {
+        "storage": "file",
+        "key": "my-key"
+    },
+    "loop_control": {
+        "max_steps_per_turn": 5000,
+        "max_retries_per_step": 3,
+        "max_ralph_iterations": 0,
+        "reserved_context_size": 50000,
+        "compaction_trigger_ratio": 0.85
+    },
+    "env": {
+        "GOOGLE_CLOUD_PROJECT": "your-gcp-project-id",
+        "GOOGLE_CLOUD_LOCATION": "us-central1",
+        "GOOGLE_GENAI_USE_VERTEXAI": "true"
+    },
+    "contents": [],
+    "generation_config": {
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "top_k": 50,
+        "max_output_tokens": 65536,
+        "thinking_config": {
+            "include_thoughts": true,
+            "thinking_budget": 32000
+        }
+    },
+    "thinking_effort": "HIGH",
+    "safety_settings": [
+        {
+            "category": "HARM_CATEGORY_HARASSMENT",
+            "threshold": "BLOCK_ONLY_HIGH"
+        },
+        {
+            "category": "HARM_CATEGORY_HATE_SPEECH",
+            "threshold": "BLOCK_ONLY_HIGH"
+        },
+        {
+            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "threshold": "BLOCK_ONLY_HIGH"
+        },
+        {
+            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "threshold": "BLOCK_ONLY_HIGH"
+        },
+        {
+            "category": "HARM_CATEGORY_CIVIC_INTEGRITY",
+            "threshold": "BLOCK_ONLY_HIGH"
+        }
+    ],
+    "notifications": {
+        "enabled": true,
+        "sound": true,
+        "desktop": true
+    },
+    "mcp": {
+        "enabled": true,
+        "servers": []
+    },
+    "background": {
+        "max_running_tasks": 4,
+        "read_max_bytes": 30000,
+        "notification_tail_lines": 20,
+        "notification_tail_chars": 3000,
+        "wait_poll_interval_ms": 500,
+        "worker_heartbeat_interval_ms": 5000,
+        "worker_stale_after_ms": 15000,
+        "kill_grace_period_ms": 2000,
+        "keep_alive_on_exit": false,
+        "agent_task_timeout_s": 900,
+        "print_wait_ceiling_s": 3600
+    }
+}
