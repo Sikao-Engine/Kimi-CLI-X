@@ -32,10 +32,10 @@ async def summarize(temp_file: str | None = None, session: Session | None = None
     if lines:
         memory_content = '\n'.join(lines)
         if only_return_remember_str:
-            memory_content = f'Remember this:\n```\n{memory_content}\n```\n'
             return memory_content
-        system_prompts = get_system_prompt(False, base._default_yolo, '.', f'Memory:\n\n{memory_content}', SystemPromptType.Worker)
-        await session.clear(custom_system_prompt=system_prompts)
+        await session.clear()
+        memory_content = f'Remember this, no other operation:\n```\n{memory_content}\n```\n'
+        await prompt_async(memory_content, session=session, info_print=False)
     else:
         print_warning('No memory generated.')
         return None

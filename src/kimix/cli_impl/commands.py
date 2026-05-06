@@ -256,8 +256,7 @@ def _cmd_file(task_split: list[str], text_arr: list[str]) -> tuple[str | None, b
 
 def _cmd_ralph(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     if len(task_split) < 2:
-        print_warning('Ralph loop reset to default.')
-        base._default_ralph = None
+        print_error(f'command format error, must be /ralph:path')
         return None, False
     val = task_split[1].strip().lower()
     session = get_default_session()
@@ -265,12 +264,12 @@ def _cmd_ralph(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
         base._default_ralph = -1
         if session:
             session._cli._runtime.config.loop_control.max_ralph_iterations = -1
-        print_success('Ralph mode ON.')
+        print_success(f'Ralph mode set to -1.')
     elif val == 'off':
-        base._default_ralph = 0
+        base._default_ralph = None
         if session:
             session._cli._runtime.config.loop_control.max_ralph_iterations = 0
-        print_success('Ralph mode OFF.')
+        print_success(f'Ralph mode set to default.')
     else:
         try:
             num = int(val)
@@ -279,7 +278,7 @@ def _cmd_ralph(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
                 session._cli._runtime.config.loop_control.max_ralph_iterations = num
             print_success(f'Ralph mode set to {num}.')
         except ValueError:
-            print_error('Command must be /ralph:on, /ralph:off, /ralph:<num>, or /ralph')
+            print_error('Command must be /ralph:on, /ralph:off, /ralph:<num>')
     return None, False
 
 
