@@ -43,6 +43,7 @@ def _export_to_temp_file(key: Path | None, content: str, ext: str = '.txt') -> t
             _temp_set[key] = id
     if new_id:
         _temp_idx += 1
+    _temp_folder.mkdir(parents=True, exist_ok=True)
     name = str(_temp_folder / (str(id) + ext))
     # Append content if key exists, otherwise overwrite/create
     mode = 'a' if not new_id else 'w'
