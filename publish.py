@@ -141,7 +141,7 @@ def process_package(name: str, cwd: str | None, token: str) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="发布 Python 包工具")
-    parser.add_argument("--token", default=None, help="PyPI/仓库的发布 token")
+    parser.add_argument("--token", "-t", default=None, help="PyPI/仓库的发布 token")
     parser.add_argument("--bump-version", action="store_true", help="仅执行版本升级")
     args = parser.parse_args()
 
