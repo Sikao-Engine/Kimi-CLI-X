@@ -177,16 +177,23 @@ from kimi_cli.wire.types import (
 )
 
 _TOOL_TYPES = (ToolCall, ToolCallPart, ToolResult)
-def print_agent_json(wire_msg: Any, output_function: Callable[[str, bool], Any] | None = None) -> None:
-    flag = getattr(PRINT_STREAM, 'flag', None)
 
-    def _switch(new_flag: str | None) -> None:
+def print_agent_json(wire_msg: Any, output_function: Callable[[str, bool], Any] | None = None) -> None:
+    def _set_last_ended_with_newline(ended: bool) -> None:
+        PRINT_STREAM.last_ended_with_newline = ended
+
+    flag = getattr(PRINT_STREAM, 'flag', None)
+    _last_ended_with_newline = getattr(PRINT_STREAM, 'last_ended_with_newline', False)
+
+    def _switch(new_flag: str | None) -> bool:
         nonlocal flag
         if flag != new_flag:
-            if flag is not None and flag != 'tool':
-                print(flag)
+            if flag is not None and flag != 'tool' and not _last_ended_with_newline:
+                print()
             flag = new_flag
             PRINT_STREAM.flag = new_flag
+            return True
+        return False
 
     if isinstance(wire_msg, ApprovalRequest):
         wire_msg.resolve("approve")
@@ -199,12 +206,12 @@ def print_agent_json(wire_msg: Any, output_function: Callable[[str, bool], Any] 
     if isinstance(wire_msg, ThinkPart):
         think_content = wire_msg.think
         if think_content.strip() and not _quiet:
-            if flag != 'think':
+            if _switch('think'):
                 think_content = f"[Think] {think_content}"
-                _switch('think')
             if output_function:
                 output_function(think_content, True)
             colorful_print(think_content, fg=Color.BRIGHT_CYAN, end='')
+            _set_last_ended_with_newline(think_content.endswith('\n'))
         return
 
     if isinstance(wire_msg, TextPart):
@@ -217,6 +224,7 @@ def print_agent_json(wire_msg: Any, output_function: Callable[[str, bool], Any] 
                 _print_func(f"\n{chunk}", '')
             else:
                 print(chunk, end='')
+                _set_last_ended_with_newline(chunk.endswith('\n'))
         return
 
     if isinstance(wire_msg, _TOOL_TYPES):
