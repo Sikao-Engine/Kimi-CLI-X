@@ -1,5 +1,6 @@
 import asyncio
 import re
+import ssl
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 from playwright.async_api import async_playwright
@@ -48,9 +49,28 @@ async def _fetch_html(url: str, user_agent: str, viewport: dict, wait_until: str
 async def _fetch_html_http(url: str, user_agent: str) -> str:
     """Fallback HTTP fetch when Playwright browser is unavailable."""
     import urllib.request
+
     req = urllib.request.Request(url, headers={"User-Agent": user_agent})
     loop = asyncio.get_running_loop()
-    response = await loop.run_in_executor(None, urllib.request.urlopen, req)
+
+    def _urlopen(req):
+        try:
+            return urllib.request.urlopen(req, timeout=30)
+        except Exception as exc:
+            # Retry with relaxed SSL context on SSL-related failures (e.g. UNEXPECTED_EOF_WHILE_READING)
+            is_ssl_err = (
+                isinstance(exc, ssl.SSLError)
+                or (hasattr(exc, "reason") and isinstance(exc.reason, ssl.SSLError))
+                or "SSL" in str(exc)
+            )
+            if not is_ssl_err:
+                raise
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            return urllib.request.urlopen(req, context=ctx, timeout=30)
+
+    response = await loop.run_in_executor(None, _urlopen, req)
     charset = response.headers.get_content_charset("utf-8")
     data = await loop.run_in_executor(None, response.read)
     return data.decode(charset, errors="replace")

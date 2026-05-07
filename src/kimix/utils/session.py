@@ -72,10 +72,12 @@ async def _create_session_async(
             agent_file = Path(agent_file)
         if not agent_file.is_absolute():
             agent_file = base._default_agent_file_dir / agent_file
-    skills_dirs = _ensure_skill_dirs(skills_dir) if skills_dir is not None else base.get_skill_dirs()
+    skills_dirs = _ensure_skill_dirs(
+        skills_dir) if skills_dir is not None else base.get_skill_dirs()
     system_prompts: Callable[[BuiltinSystemPromptArgs], str] | None = None
     if system_prompts is None:
-        system_prompts = get_system_prompt(is_sub_agent, yolo, work_dir, extra_system_prompt, agent_type)
+        system_prompts = get_system_prompt(
+            is_sub_agent, yolo, work_dir, extra_system_prompt, agent_type)
     if resume:
         session = await Session.resume(
             session_id=session_id,
@@ -141,6 +143,16 @@ def create_session(
         vfs_path=vfs_path,
         extra_system_prompt=extra_system_prompt
     ))
+
+
+def set_ralph_loop(value: int, session: Session | None = None) -> None:
+    if session is None:
+        session = get_default_session()
+    if value < 0:
+        value = -1
+    base._default_ralph = value
+    if session:
+        session._cli._runtime.config.loop_control.max_ralph_iterations = value
 
 
 def get_tool_call_errors(session: Session | str | None = None) -> str:
@@ -230,6 +242,7 @@ def print_usage(session: Session | None = None) -> None:
         f'Context usage: {s}'
     )
 
+
 def compact_default_context() -> None:
     if _globals._default_session and _globals._default_session.status.context_usage > 1e-8:
         print_debug('Start compacting...')
@@ -247,9 +260,10 @@ def compact_default_context() -> None:
         seconds = int(time_seconds) % 60
         time_text = f'  time: {hours}:{minutes:02d}:{seconds:02d}'
         print_success(
-        f'Context usage from {old_usage} to {new_usage}  time: {time_text}'
-    )
-        
+            f'Context usage from {old_usage} to {new_usage}  time: {time_text}'
+        )
+
+
 def clear_default_context(force_create: bool = False, resume: bool = False, print_info: bool = True) -> None:
     if _globals._default_session:
         if not force_create and _globals._default_session.status.context_usage < 1e-8:

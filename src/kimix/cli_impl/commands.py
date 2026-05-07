@@ -8,7 +8,7 @@ from .utils import _input, _split_text
 from kimix.base import print_success, print_error, print_warning, print_debug, colorful_text, Color
 from kimix.utils import (
     clear_default_context, get_default_session, fix_error, compact_default_context,
-    print_usage, execute_plan, check_plan_cache
+    print_usage, execute_plan, check_plan_cache, set_ralph_loop
 )
 from kimix.dag.agent_swarm import create_swarm_session
 from kimix.dag import Executor
@@ -261,21 +261,16 @@ def _cmd_ralph(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     val = task_split[1].strip().lower()
     session = get_default_session()
     if val == 'on':
-        base._default_ralph = -1
-        if session:
-            session._cli._runtime.config.loop_control.max_ralph_iterations = -1
+        set_ralph_loop(-1)
         print_success(f'Ralph mode set to -1.')
     elif val == 'off':
         base._default_ralph = None
-        if session:
-            session._cli._runtime.config.loop_control.max_ralph_iterations = 0
+        set_ralph_loop(0)
         print_success(f'Ralph mode set to default.')
     else:
         try:
             num = int(val)
-            base._default_ralph = num
-            if session:
-                session._cli._runtime.config.loop_control.max_ralph_iterations = num
+            set_ralph_loop(num)
             print_success(f'Ralph mode set to {num}.')
         except ValueError:
             print_error('Command must be /ralph:on, /ralph:off, /ralph:<num>')

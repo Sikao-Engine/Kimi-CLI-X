@@ -25,6 +25,7 @@ from .session import (
     print_usage,
     clear_default_context,
     compact_default_context,
+    set_ralph_loop,
 )
 from .prompt import prompt_async, prompt, prompt_path, execute_plan, check_plan_cache
 from .fix_error import fix_error, async_prompt, async_fix_error
@@ -64,5 +65,6 @@ __all__ = [
     "fix_error",
     "async_prompt",
     "async_fix_error",
-    "compact_default_context"
+    "compact_default_context",
+    "set_ralph_loop"
 ]
