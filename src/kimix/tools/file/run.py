@@ -149,10 +149,27 @@ class Run(CallableTool2[RunParams]):
 
     async def __call__(self, params: RunParams) -> ToolReturnValue:
         # params.path may contain arguments, split it with space, then insert to the start of params.args
+        # Try progressively longer prefixes to find an existing file, so paths with spaces are handled.
         if " " in params.path:
             parts = params.path.split(" ")
-            params.path = parts[0]
-            params.args = parts[1:] + params.args
+            candidate = parts[0]
+            for i in range(1, len(parts)):
+                candidate += " " + parts[i]
+                try:
+                    is_file = Path(candidate).is_file()
+                except OSError:
+                    is_file = False
+                if is_file:
+                    params.path = candidate
+                    remaining = parts[i + 1 :]
+                    if remaining:
+                        params.args.insert(0, " ".join(remaining))
+                    break
+            else:
+                params.path = parts[0]
+                remaining = parts[1:]
+                if remaining:
+                    params.args.insert(0, " ".join(remaining))
 
         async with self._semaphore:
             import sys
