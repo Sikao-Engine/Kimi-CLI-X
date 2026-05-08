@@ -5,11 +5,22 @@ from . import constants
 from .utils import _input, _split_text
 from .args import set_arg
 from .commands import _command_map, _cmd_unknown
+import kimix.base as base
 from kimix.base import print_debug, print_success, print_error, print_warning, print_info, sync_all
 from kimix.utils import (
     prompt, _create_default_session, get_default_session
 )
+from kimix.cot import cot_prompt
 exec_ctx: dict[str, Any] = {}
+def llm_prompt(prompt_str: str) -> str:
+    lst = []
+    def output_func(s, thinking):
+        if not thinking:
+            lst.append(s)
+    prompt(prompt_str, output_function=output_func)
+    return '\n'.join(lst)
+# cot_prompt(prompt_str, llm_prompt)
+
 def _client_cli() -> None:
     global exec_ctx
     input_str = None
@@ -82,8 +93,12 @@ def _client_cli() -> None:
                         input_str = None
                 if input_str is not None and len(input_str) > 0:
                     try:
-                        prompt(prompt_str=input_str,
-                               session=get_default_session())
+                        if base._default_manually_cot:
+                            print_info('Manually CoT mode enabled: may use multiple sessions and extra tokens.')
+                            cot_prompt(input_str, llm_prompt)
+                        else:
+                            prompt(prompt_str=input_str,
+                                   session=get_default_session())
                     except KeyboardInterrupt as e:
                         print_warning('Keyboard Interrupt.')
         except KeyboardInterrupt as e:

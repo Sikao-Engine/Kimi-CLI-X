@@ -30,6 +30,8 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
                         help='Disable thinking mode')
     parser.add_argument('-no_yolo', '--no_yolo', action='store_true',
                         help='Disable YOLO mode')
+    parser.add_argument('--manually-cot', action='store_true',
+                        help='Enable manually CoT mode')
     parser.add_argument('-s', '--skill-dir', type=str, nargs='*', default=None,
                         help='Specify custom skill directory(s)')
     parser.add_argument('--config', type=str, default=None,
@@ -64,6 +66,10 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
         print_debug('YOLO OFF.')
     else:
         base.set_default_yolo(True)
+
+    if args.manually_cot:
+        base.set_default_manually_cot(True)
+        print_debug('Manually CoT mode ON.')
 
     if args.ralph is not None:
         base._default_ralph = args.ralph
@@ -115,7 +121,11 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
         except Exception as e:
             print_warning(
                 f'Failed to load config file: {str(config_path)} ({e})')
-
+    else:
+        default_config_path = Path(__file__).parent.parent / "default_config.json"
+        if not default_config_path.exists():
+            from . import init
+            init.init(False)
     # Handle --skill-dir argument
     if args.skill_dir:
         skill_dirs = list(base._default_skill_dirs)

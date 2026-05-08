@@ -8,3 +8,4 @@ requirements.txt
 uv.lock
 clone_submodule.py
 sse_log_*
+src/kimix/default_config.json

@@ -378,6 +378,11 @@ def set_default_skill_dirs(value: list[Any]) -> None:
     _default_skill_dirs = value
 
 
+def set_default_manually_cot(value: bool) -> None:
+    global _default_manually_cot
+    _default_manually_cot = value
+
+
 def set_default_provider(value: dict[str, Any] | None) -> None:
     global _default_provider
     _default_provider = value
@@ -414,6 +419,7 @@ def get_skill_dirs(use_kaos_path: bool = True) -> list[Any]:
         return _default_skill_dirs
     return []
 
+_default_manually_cot: bool = False
 _default_ralph: int | None = None
 generate_memory = '''Summarize the session for a coding agent. Output directly; no preamble.
 1. **Project Overview**: Purpose, scope, tech stack.

@@ -277,6 +277,22 @@ def _cmd_ralph(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     return None, False
 
 
+def _cmd_cot(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
+    if len(task_split) < 2:
+        print_error('Command must be /cot:on or /cot:off')
+        return None, False
+    val = task_split[1].strip().lower()
+    if val == 'on':
+        base.set_default_manually_cot(True)
+        print_success('Manually CoT mode ON.')
+    elif val == 'off':
+        base.set_default_manually_cot(False)
+        print_success('Manually CoT mode OFF.')
+    else:
+        print_error('Command must be /cot:on or /cot:off')
+    return None, False
+
+
 def _cmd_unknown(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     print_warning('Unrecognized command.')
     return None, False
@@ -298,5 +314,6 @@ _command_map = {
     'compact': _cmd_compact,
     'export': _cmd_export,
     'swarm': _cmd_swarm,
-    'ralph': _cmd_ralph
+    'ralph': _cmd_ralph,
+    'cot': _cmd_cot
 }
