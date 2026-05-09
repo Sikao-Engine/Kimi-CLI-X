@@ -26,6 +26,7 @@ dependencies = [
     "sse-starlette>=2.0.0",
     "httpx>=0.28.0",
     "pydantic>=2.0.0",
+    "opencc-python-reimplemented>=0.1.7",
 ]
 
 [project.optional-dependencies]

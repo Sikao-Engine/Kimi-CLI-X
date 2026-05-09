@@ -42,51 +42,40 @@ def clean_text(text: str, keep_newlines: bool = True) -> str:
     return text.strip()
 
 
-def _strip_surrogates(text: str) -> str:
-    """Remove lone surrogate code points."""
-    return "".join(ch for ch in text if not (0xD800 <= ord(ch) <= 0xDFFF))
-
-
-def _strip_noncharacters(text: str) -> str:
-    """Remove Unicode noncharacters."""
-
-    def _keep(ch: str) -> bool:
+def _strip_invalid_unicode(text: str) -> str:
+    """Remove surrogates, noncharacters, PUA, and replacement chars in one pass."""
+    result: list[str] = []
+    append = result.append
+    for ch in text:
         cp = ord(ch)
-        if 0xFDD0 <= cp <= 0xFDEF:
-            return False
-        if (cp & 0xFFFF) in (0xFFFE, 0xFFFF):
-            return False
-        return True
-
-    return "".join(ch for ch in text if _keep(ch))
-
-
-def _strip_pua(text: str) -> str:
-    """Remove Private Use Area code points."""
-
-    def _keep(ch: str) -> bool:
-        cp = ord(ch)
-        if 0xE000 <= cp <= 0xF8FF:
-            return False
-        if 0xF0000 <= cp <= 0xFFFFD:
-            return False
-        if 0x100000 <= cp <= 0x10FFFD:
-            return False
-        return True
-
-    return "".join(ch for ch in text if _keep(ch))
+        # Surrogates
+        if 0xD800 <= cp <= 0xDFFF:
+            continue
+        # Replacement char
+        if cp == 0xFFFD:
+            continue
+        # Noncharacters
+        if 0xFDD0 <= cp <= 0xFDEF or (cp & 0xFFFF) in (0xFFFE, 0xFFFF):
+            continue
+        # PUA
+        if 0xE000 <= cp <= 0xF8FF or 0xF0000 <= cp <= 0xFFFFD or 0x100000 <= cp <= 0x10FFFD:
+            continue
+        append(ch)
+    return "".join(result)
 
 
-def _strip_replacement_chars(text: str) -> str:
-    """Remove Unicode replacement characters (sign of prior encoding corruption)."""
-    return text.replace("\ufffd", "")
+_DEDUPE_CACHE: dict[int, re.Pattern[str]] = {}
 
 
 def _dedupe_repeats(text: str, max_repeat: int = 100) -> str:
     """Collapse runs of a single character longer than *max_repeat*."""
     if max_repeat <= 0:
         return text
-    return re.sub(r"(.)\1{" + str(max_repeat) + r",}", lambda m: m.group(1) * max_repeat, text)
+    pattern = _DEDUPE_CACHE.get(max_repeat)
+    if pattern is None:
+        pattern = re.compile(r"(.)\1{" + str(max_repeat) + r",}")
+        _DEDUPE_CACHE[max_repeat] = pattern
+    return pattern.sub(lambda m: m.group(1) * max_repeat, text)
 
 
 # Factored out the common suffix so the alternation is shorter and the regex
@@ -188,18 +177,67 @@ class _Replacer:
         return f"`{path}`{trailing}"
 
 
+def _sanitize_text(text: str) -> str:
+    """Apply normalize_encoding, remove_meaningless_symbols, and
+    remove_redundant_whitespace with a single code-block extraction.
+    """
+    text, placeholders = _extract_code(text)
+
+    # From normalize_encoding
+    text = unicodedata.normalize("NFKC", text)
+
+    # Full-width to half-width for remaining chars
+    result: list[str] = []
+    append = result.append
+    for ch in text:
+        code = ord(ch)
+        if _FULLWIDTH_START <= code <= _FULLWIDTH_END:
+            append(chr(code - _FULLWIDTH_OFFSET))
+        elif ch == _FULLWIDTH_SPACE:
+            append(" ")
+        else:
+            append(ch)
+    text = "".join(result)
+
+    # Traditional to Simplified (optional)
+    try:
+        import opencc
+
+        converter = opencc.OpenCC("t2s")
+        text = converter.convert(text)
+    except ImportError:
+        pass
+
+    # From remove_meaningless_symbols
+    trans = str.maketrans("", "", _ZW_CHARS)
+    text = text.translate(trans)
+    text = _EMOJI_RE.sub("", text)
+    text = _REPEAT_PUNCT_RE.sub(r"\1", text)
+
+    # From remove_redundant_whitespace
+    text = re.sub(r"[\s]+", " ", text).strip()
+
+    return _restore_code(text, placeholders)
+
+
 def escape_file_paths(
     text: str,
     *,
     max_chars: int = 0,
     max_repeat: int = 100,
     truncate_msg: str = "",
+    case_mode: str = "",
 ) -> str:
     """Detect legal file paths in *text* and wrap each one in backticks,
     then sanitize the result to prevent ``tokenization failed`` errors.
 
     Paths that are already wrapped in quotes or backticks are left untouched.
     URLs, pure fractions and bare dates are ignored.
+
+    This function also merges the behavior of *remove_meaningless_symbols*,
+    *normalize_encoding*, and *remove_redundant_whitespace*.
+    *case_mode* can be set to ``'lower'`` or ``'title'`` to apply
+    `normalize_case` as well.
     """
     if not isinstance(text, str):
         text = str(text)
@@ -209,12 +247,20 @@ def escape_file_paths(
         text = _PATH_RE.sub(_Replacer(text), text)
 
     # Sanitize for tokenizer
-    text = _strip_surrogates(text)
-    text = _strip_noncharacters(text)
-    text = _strip_pua(text)
-    text = _strip_replacement_chars(text)
+    text = _strip_invalid_unicode(text)
     text = clean_text(text, keep_newlines=True)
     text = _dedupe_repeats(text, max_repeat=max_repeat)
+
+    # Merge additional text normalizations with single code-block extraction
+    text = _sanitize_text(text)
+
+    if case_mode:
+        text, placeholders = _extract_code(text)
+        if case_mode == "lower":
+            text = text.lower()
+        elif case_mode == "title":
+            text = text.title()
+        text = _restore_code(text, placeholders)
 
     if max_chars > 0 and len(text) > max_chars:
         text = text[:max_chars]
@@ -290,85 +336,3 @@ def _restore_code(text: str, placeholders: list[str]) -> str:
     return text
 
 
-def remove_redundant_whitespace(text: str) -> str:
-    """删除多余空格、换行、制表符，将连续空白压缩为单个空格。
-
-    示例: ``  你好  世界  `` → ``你好 世界``
-    Markdown 代码块及行内代码保留原样。
-    """
-    text, placeholders = _extract_code(text)
-    text = re.sub(r"[\s]+", " ", text).strip()
-    return _restore_code(text, placeholders)
-
-
-def normalize_encoding(text: str) -> str:
-    """全角转半角、繁简转换、Unicode 规范化。
-
-    示例: ``ＡＩ`` → ``AI``
-    Markdown 代码块及行内代码保留原样。
-    """
-    text, placeholders = _extract_code(text)
-
-    # Unicode NFKC normalization
-    text = unicodedata.normalize("NFKC", text)
-
-    # Full-width to half-width for remaining chars
-    def _fw2hw(s: str) -> str:
-        result: list[str] = []
-        for ch in s:
-            code = ord(ch)
-            if _FULLWIDTH_START <= code <= _FULLWIDTH_END:
-                result.append(chr(code - _FULLWIDTH_OFFSET))
-            elif ch == _FULLWIDTH_SPACE:
-                result.append(" ")
-            else:
-                result.append(ch)
-        return "".join(result)
-
-    text = _fw2hw(text)
-
-    # Traditional to Simplified (optional)
-    try:
-        import opencc
-
-        converter = opencc.OpenCC("t2s")
-        text = converter.convert(text)
-    except ImportError:
-        pass
-
-    return _restore_code(text, placeholders)
-
-
-def remove_meaningless_symbols(text: str) -> str:
-    """清理 emoji、特殊符号、重复标点。
-
-    示例: ``!!!???`` → ``!``
-    Markdown 代码块及行内代码保留原样。
-    """
-    text, placeholders = _extract_code(text)
-
-    # Remove zero-width / invisible chars
-    trans = str.maketrans("", "", _ZW_CHARS)
-    text = text.translate(trans)
-
-    # Remove emoji
-    text = _EMOJI_RE.sub("", text)
-
-    # Deduplicate repeated punctuation (3+ identical -> 1)
-    text = _REPEAT_PUNCT_RE.sub(r"\1", text)
-
-    return _restore_code(text, placeholders)
-
-
-def normalize_case(text: str, mode: str = "lower") -> str:
-    """根据场景统一大小写（代码保留原样）。
-
-    mode: ``'lower'`` 全小写, ``'title'`` 首字母大写。
-    Markdown 代码块及行内代码保留原样。
-    """
-    text, placeholders = _extract_code(text)
-    if mode == "lower":
-        text = text.lower()
-    elif mode == "title":
-        text = text.title()
-    return _restore_code(text, placeholders)

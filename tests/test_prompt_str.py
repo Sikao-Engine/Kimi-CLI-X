@@ -13,7 +13,7 @@ from kimix.utils.prompt_str import (
 
 
 class TestEscapeFilePaths:
-    """Tests for the merged escape_file_paths + sanitize_for_tokenizer function."""
+    """Tests for escape_file_paths with merged normalizations."""
 
     def test_no_paths_no_slashes(self):
         text = "hello world"
@@ -25,7 +25,8 @@ class TestEscapeFilePaths:
 
     def test_zero_width_chars_removed_with_spaces(self):
         text = "hello \u200b world"
-        assert escape_file_paths(text) == "hello  world"
+        # clean_text removes zwj, then remove_redundant_whitespace collapses spaces
+        assert escape_file_paths(text) == "hello world"
 
     def test_surrogates_removed(self):
         text = "hello\ud800world"
@@ -113,12 +114,147 @@ class TestEscapeFilePaths:
         text = "today is 2024/01/15"
         assert escape_file_paths(text) == "today is 2024/01/15"
 
-    def test_newlines_preserved(self):
+    def test_newlines_collapsed(self):
         text = "line1\nline2"
-        assert escape_file_paths(text) == "line1\nline2"
+        # remove_redundant_whitespace is now merged in
+        assert escape_file_paths(text) == "line1 line2"
 
     def test_empty_string(self):
         assert escape_file_paths("") == ""
+
+    def test_symbols_removed_by_default(self):
+        text = "hello!!!??? 😀 world"
+        result = escape_file_paths(text)
+        assert "!!!" not in result
+        assert "???" not in result
+        assert "😀" not in result
+        assert result == "hello! world"
+
+    def test_encoding_normalized_by_default(self):
+        text = "ＡＩ hello"
+        result = escape_file_paths(text)
+        assert result == "AI hello"
+
+    def test_whitespace_collapsed_by_default(self):
+        text = "hello    world\n\n\nfoo"
+        result = escape_file_paths(text)
+        assert result == "hello world foo"
+
+    def test_case_mode_lower(self):
+        text = "Hello World"
+        result = escape_file_paths(text, case_mode="lower")
+        assert result == "hello world"
+
+    def test_case_mode_title(self):
+        text = "hello world"
+        result = escape_file_paths(text, case_mode="title")
+        assert result == "Hello World"
+
+    def test_combined_normalization(self):
+        text = "  Hello    World!!! 😀  \n\n  "
+        result = escape_file_paths(text, case_mode="lower")
+        assert result == "hello world!"
+
+    @patch("kimix.utils.prompt_str.Path.exists", return_value=True)
+    def test_path_escape_with_whitespace_collapsed(self, mock_exists):
+        text = "check src/kimix/utils.py    for details"
+        result = escape_file_paths(text)
+        assert "`src/kimix/utils.py`" in result
+        assert "  " not in result
+
+    def test_code_blocks_preserved(self):
+        text = "```python\n  x = 1\n```\nhello    world"
+        result = escape_file_paths(text)
+        assert "```python\n  x = 1\n```" in result
+        assert "hello world" in result
+
+    def test_inline_code_preserved(self):
+        text = "hello `  world  ` foo"
+        result = escape_file_paths(text)
+        assert result == "hello `  world  ` foo"
+
+    def test_all_normalizations_together(self):
+        text = "  HELLO    WORLD!!! 😀  \n\n  "
+        result = escape_file_paths(text, case_mode="lower")
+        assert result == "hello world!"
+
+    def test_empty_string_with_case_mode(self):
+        assert escape_file_paths("", case_mode="lower") == ""
+
+    def test_non_string_with_case_mode(self):
+        result = escape_file_paths(123, case_mode="title")
+        assert result == "123"
+
+    def test_fullwidth_digits_normalized(self):
+        text = "price is １２３"
+        result = escape_file_paths(text)
+        assert result == "price is 123"
+
+    def test_zero_width_removed_via_symbols(self):
+        text = "hello\u200b\u200c world"
+        result = escape_file_paths(text)
+        assert "\u200b" not in result
+        assert "\u200c" not in result
+        assert result == "hello world"
+
+    def test_tabs_collapsed(self):
+        text = "a\t\t\tb"
+        result = escape_file_paths(text)
+        assert result == "a b"
+
+    def test_case_mode_invalid(self):
+        text = "Hello World"
+        result = escape_file_paths(text, case_mode="invalid")
+        assert result == "Hello World"
+
+    def test_max_chars_with_merged_normalization(self):
+        text = "  HELLO    WORLD  "
+        result = escape_file_paths(text, case_mode="lower", max_chars=8)
+        assert result == "hello wo"
+
+    def test_max_chars_truncate_msg_with_merged(self):
+        text = "  HELLO    WORLD  "
+        result = escape_file_paths(
+            text,
+            case_mode="lower",
+            max_chars=10,
+            truncate_msg="...",
+        )
+        assert result == "hello w..."
+
+    @patch("kimix.utils.prompt_str.Path.exists", return_value=True)
+    def test_path_escape_with_all_normalizations(self, mock_exists):
+        text = "Check  src/kimix/utils.py   for  details!!! 😀 "
+        result = escape_file_paths(text, case_mode="lower")
+        assert "`src/kimix/utils.py`" in result
+        assert result == "check `src/kimix/utils.py` for details!"
+
+    def test_code_block_preserved_with_all_normalizations(self):
+        text = "```python\n  x = 1\n```\n  HELLO    WORLD!!! 😀  "
+        result = escape_file_paths(text, case_mode="lower")
+        assert "```python\n  x = 1\n```" in result
+        assert "hello world!" in result
+
+    def test_inline_code_preserved_with_all_normalizations(self):
+        text = "`  HELLO  `   WORLD!!! 😀"
+        result = escape_file_paths(text, case_mode="lower")
+        assert "`  HELLO  `" in result
+        assert "world!" in result
+
+    def test_dedupe_repeats_with_whitespace_collapsed(self):
+        text = "A" * 200 + "    " + "B" * 200
+        result = escape_file_paths(text, max_repeat=50)
+        assert result == "A" * 50 + " " + "B" * 50
+
+    def test_fraction_ignored_after_normalization(self):
+        text = "ratio 3/4 and 5/6"
+        result = escape_file_paths(text)
+        assert result == "ratio 3/4 and 5/6"
+
+    def test_date_ignored_after_normalization(self):
+        text = "date 2024/01/15 and 01/02/2024"
+        result = escape_file_paths(text)
+        assert result == "date 2024/01/15 and 01/02/2024"
 
 
 class TestCleanText:
