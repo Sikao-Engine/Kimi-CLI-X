@@ -12,7 +12,17 @@ import numpy as np
 
 from kimix.memory.types import MemoryEntry, MemoryType, _DECAY_COEFF
 from kimix.memory.embedding import EmbeddingProvider
-from kimix.retrieval import InvertedIndex, NgramTokenizer, Searcher
+from kimix.retrieval import (
+    BM25Scorer,
+    InvertedIndex,
+    NgramTokenizer,
+    QueryPerformancePredictor,
+    RM3Expander,
+    Searcher,
+    SimHash,
+    jaro_winkler_similarity,
+    mmr_rerank,
+)
 from kimix.memory.short_term_memory import ShortTermMemory
 
 
@@ -21,6 +31,7 @@ class LongTermMemory:
         "storage_path", "dim", "entries", "index", "embedding_provider",
         "_dirty", "_backend", "_agent_id", "_bm25_index", "_bm25_searcher",
         "_doc_id_map", "_bm25_doc_to_entry_id", "_next_doc_id",
+        "_simhash_map", "_near_dup_threshold",
     )
 
     def __init__(
@@ -50,6 +61,8 @@ class LongTermMemory:
         self._doc_id_map: dict[str, int] = {}
         self._bm25_doc_to_entry_id: list[str] = []
         self._next_doc_id = 0
+        self._simhash_map: dict[str, SimHash] = {}
+        self._near_dup_threshold = 3
 
         self._load()
 
@@ -67,12 +80,33 @@ class LongTermMemory:
         self._doc_id_map = {}
         self._next_doc_id = 0
 
+    def _find_near_duplicate(self, content: str) -> str | None:
+        """Return entry_id of a near-duplicate entry, or None."""
+        if self._backend is not None:
+            return None
+        h = SimHash(content)
+        for eid, other in self._simhash_map.items():
+            if h.is_near_duplicate(other, threshold=self._near_dup_threshold):
+                return eid
+        return None
+
     def _insert_entry(self, entry_id: str, entry: MemoryEntry, *, invalidate_bm25: bool = True) -> None:
         if self._backend is not None:
             self._backend.store(entry, entry_id, dim=self.dim)
         else:
+            dup_id = self._find_near_duplicate(entry.content)
+            if dup_id is not None:
+                existing = self.entries.get(dup_id)
+                if existing is not None:
+                    existing.importance = min(10.0, existing.importance + entry.importance * 0.5)
+                    existing.touch()
+                    if entry.tags:
+                        existing.tags = list(dict.fromkeys(existing.tags + entry.tags))
+                    self._dirty = True
+                    return
             self.entries[entry_id] = entry
             self._update_index(entry_id, entry)
+            self._simhash_map[entry_id] = SimHash(entry.content)
             self._dirty = True
         if invalidate_bm25:
             self._invalidate_bm25()
@@ -159,6 +193,7 @@ class LongTermMemory:
                 entry_id = self._hash(entry.content)
                 self.entries[entry_id] = entry
                 self._update_index(entry_id, entry)
+                self._simhash_map[entry_id] = SimHash(entry.content)
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
@@ -243,6 +278,13 @@ class LongTermMemory:
         use_hybrid: bool = True,
         bm25_weight: float = 0.3,
         query_vec: np.ndarray | None = None,
+        use_diversity: bool = True,
+        diversity_lambda: float = 0.5,
+        use_rm3: bool = True,
+        rm3_fb_docs: int = 3,
+        rm3_fb_terms: int = 10,
+        rm3_alpha: float = 0.5,
+        adaptive_bm25: bool = True,
     ) -> list[MemoryEntry]:
         if self._backend is None and not self.entries:
             return []
@@ -326,9 +368,33 @@ class LongTermMemory:
             semantic_arr = sims.astype(np.float64) * eff
 
         bm25_arr = np.zeros(n_cand, dtype=np.float64)
+        _bm25_weight = bm25_weight
         if use_hybrid:
             searcher = self._ensure_bm25()
-            bm25_results = searcher.search(query, top_k=n_cand)
+            if adaptive_bm25 and self._bm25_index is not None:
+                scorer = BM25Scorer(self._bm25_index)
+                qpp = QueryPerformancePredictor(self._bm25_index, scorer)
+                q_tokens = searcher.tokenizer.tokenize(query)
+                if qpp.is_hard_query(q_tokens, avg_idf_threshold=2.0):
+                    _bm25_weight = min(0.6, bm25_weight + 0.2)
+                else:
+                    _bm25_weight = max(0.1, bm25_weight - 0.1)
+
+            if use_rm3 and self._bm25_index is not None:
+                scorer = BM25Scorer(self._bm25_index)
+                expander = RM3Expander(
+                    self._bm25_index,
+                    scorer,
+                    fb_docs=rm3_fb_docs,
+                    fb_terms=rm3_fb_terms,
+                    alpha=rm3_alpha,
+                )
+                q_tokens = searcher.tokenizer.tokenize(query)
+                expanded_tokens = expander.expand(q_tokens, top_k=rm3_fb_docs)
+                bm25_results = searcher.scorer.score_topk(expanded_tokens, top_k=n_cand)
+            else:
+                bm25_results = searcher.search(query, top_k=n_cand)
+
             if bm25_results:
                 scores = [score for _, score in bm25_results]
                 max_bm25 = max(scores)
@@ -341,14 +407,36 @@ class LongTermMemory:
                     if idx is not None:
                         bm25_arr[idx] = (score - min_bm25) / bm25_range
 
-        final = (1.0 - bm25_weight) * semantic_arr + bm25_weight * bm25_arr
+        final = (1.0 - _bm25_weight) * semantic_arr + _bm25_weight * bm25_arr
         if top_k * 4 < n_cand:
             top_indices = np.argpartition(final, -top_k)[-top_k:]
             top_indices = top_indices[np.argsort(final[top_indices])[::-1]]
         else:
             top_indices = np.argsort(final)[::-1][:top_k]
         top_indices = top_indices.tolist()
-        results = [candidates[i] for i in top_indices]
+
+        # Build ranked list for optional MMR diversity re-ranking
+        if use_diversity and self._bm25_index is not None:
+            # Map entry IDs to BM25 doc IDs for MMR
+            eid_to_doc_id = self._doc_id_map
+            doc_to_eid = self._bm25_doc_to_entry_id
+            ranked_docs = []
+            for i in top_indices:
+                eid = candidate_ids[i]
+                doc_id = eid_to_doc_id.get(eid)
+                if doc_id is not None:
+                    ranked_docs.append((doc_id, float(final[i])))
+            if ranked_docs:
+                mmr_results = mmr_rerank(
+                    ranked_docs, self._bm25_index, lambda_param=diversity_lambda, top_k=top_k
+                )
+                mmr_eids = [doc_to_eid[doc_id] for doc_id, _ in mmr_results if doc_id < len(doc_to_eid)]
+                id_to_entry = {candidate_ids[i]: candidates[i] for i in top_indices}
+                results = [id_to_entry[eid] for eid in mmr_eids if eid in id_to_entry]
+            else:
+                results = [candidates[i] for i in top_indices]
+        else:
+            results = [candidates[i] for i in top_indices]
 
         if self._backend is not None:
             eids = [candidate_ids[i] for i in top_indices]

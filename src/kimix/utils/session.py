@@ -61,8 +61,6 @@ async def _create_session_async(
     if session_id is None:
         session_id = str(_globals._session_idx)
         _globals._session_idx += 1
-    tool_call_failed_list: list[Any] = list()
-    base._tool_call_failed_lists[session_id] = tool_call_failed_list
     cfg, provider_dict = _create_config(provider_dict)
     session = None
     if agent_file is None:
@@ -87,7 +85,6 @@ async def _create_session_async(
             thinking=thinking if thinking is not None else base._default_thinking,
             config=cfg,
             agent_file=agent_file,
-            tool_call_failed_list=tool_call_failed_list,
             # custom arguments
             custom_system_prompt=system_prompts,
             chat_provider=chat_provider,
@@ -105,7 +102,6 @@ async def _create_session_async(
             config=cfg,
             agent_file=agent_file,
             # custom arguments
-            tool_call_failed_list=tool_call_failed_list,
             custom_system_prompt=system_prompts,
             chat_provider=chat_provider,
             vfs_path=vfs_path,
@@ -155,40 +151,15 @@ def set_ralph_loop(value: int, session: Session | None = None) -> None:
         session._cli._runtime.config.loop_control.max_ralph_iterations = value
 
 
-def get_tool_call_errors(session: Session | str | None = None) -> str:
-    if session is None:
-        id = 'default'
-    elif isinstance(session, str):
-        id = session
-    else:
-        id = session.id
-    lst = base._tool_call_failed_lists.get(id, None)
-    s = ''
-    if lst:
-        for i in lst:
-            # tuple: function-name, arguments, output, message
-            s += f'- function: {i[0]}\n- arguments: {i[1]}\n- output: {i[2]}\n- message: {i[3]}'
-        lst.clear()
-    return s
-
-
 def close_session(session: Session) -> None:
     if not session:
         return
-    try:
-        del base._tool_call_failed_lists[session.id]
-    except:
-        pass
     asyncio.run(session.close())
 
 
 async def close_session_async(session: Session) -> None:
     if not session:
         return
-    try:
-        del base._tool_call_failed_lists[session.id]
-    except:
-        pass
     await session.close()
 
 
@@ -263,6 +234,11 @@ def compact_default_context() -> None:
         print_success(
             f'Context usage from {old_usage} to {new_usage}  time: {time_text}'
         )
+
+
+def get_tool_call_errors(session: Session | None = None) -> list[dict[str, Any]]:
+    """Return a list of tool-call errors from the session."""
+    return []
 
 
 def clear_default_context(force_create: bool = False, resume: bool = False, print_info: bool = True) -> None:

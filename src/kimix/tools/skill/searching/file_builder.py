@@ -7,7 +7,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from kimix.retrieval import InvertedIndex, NgramTokenizer, Searcher
+from kimix.retrieval import (
+    InvertedIndex,
+    NgramTokenizer,
+    Searcher,
+    SimHash,
+    mmr_rerank,
+    porter_stem,
+)
 
 
 class FileReader:
@@ -184,14 +191,26 @@ class FileBuilder:
         tokenizer = NgramTokenizer(n=self._n)
         doc_info: list[dict[str, Any]] = []
         doc_id = 0
+        seen_hashes: dict[int, SimHash] = {}
         for rel, abs_path in self._collect_files():
             try:
                 with abs_path.open("r", encoding="utf-8", errors="replace") as f:
                     for line_idx, line in enumerate(f):
                         stripped = line.strip()
                         if stripped:
-                            tokens = tokenizer.tokenize(f"{rel}: {stripped}")
-                            index.add_document(doc_id, tokens)
+                            h = SimHash(stripped)
+                            dup = False
+                            for other in seen_hashes.values():
+                                if h.is_near_duplicate(other, threshold=3):
+                                    dup = True
+                                    break
+                            if dup:
+                                continue
+                            seen_hashes[doc_id] = h
+                            # Optional stemming for Latin tokens to improve recall
+                            raw_tokens = tokenizer.tokenize(f"{rel}: {stripped}")
+                            stemmed = [porter_stem(t) if t.isalpha() and len(t) > 3 else t for t in raw_tokens]
+                            index.add_document(doc_id, stemmed)
                             doc_info.append({"path": rel, "line_index": line_idx})
                             doc_id += 1
             except OSError:
@@ -203,10 +222,23 @@ class FileBuilder:
         else:
             self._search = None
 
-    def search(self, keywords: str, top_k: int = 5) -> list[dict[str, Any]]:
+    def search(
+        self,
+        keywords: str,
+        top_k: int = 5,
+        diversify: bool = False,
+        diversity_lambda: float = 0.5,
+    ) -> list[dict[str, Any]]:
         if self._search is None:
             return []
         raw_results = self._search.search(keywords, top_k=top_k)
+        if diversify and self._search.index is not None:
+            raw_results = mmr_rerank(
+                raw_results,
+                self._search.index,
+                lambda_param=diversity_lambda,
+                top_k=top_k,
+            )
         results: list[dict[str, Any]] = []
         for doc_id, score in raw_results:
             info = self._doc_info[doc_id]

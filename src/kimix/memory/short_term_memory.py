@@ -9,6 +9,7 @@ import numpy as np
 
 from kimix.memory.types import MemoryEntry, MemoryType
 from kimix.memory.embedding import EmbeddingProvider
+from kimix.retrieval import jaro_winkler_similarity
 
 
 class ShortTermMemory:
@@ -48,6 +49,7 @@ class ShortTermMemory:
         embedding_provider: EmbeddingProvider,
         top_k: int = 5,
         query_vec: np.ndarray | None = None,
+        use_string_fallback: bool = False,
     ) -> list[MemoryEntry]:
         now = time.time()
         active = self._active_buffer(now)
@@ -69,6 +71,17 @@ class ShortTermMemory:
             for entry in active
         ]
         results = [entry for _, entry in heapq.nlargest(top_k, scored, key=lambda x: x[0])]
+
+        # If all semantic scores are near-zero, optionally fall back to string similarity
+        if use_string_fallback and results:
+            max_semantic = scored[0][0] if scored else 0.0
+            if max_semantic < 0.1:
+                string_scored = [
+                    (jaro_winkler_similarity(query, entry.content) * entry.get_effective_importance(now), entry)
+                    for entry in active
+                ]
+                results = [entry for _, entry in heapq.nlargest(top_k, string_scored, key=lambda x: x[0])]
+
         for entry in results:
             entry.touch(now)
         return results

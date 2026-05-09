@@ -390,7 +390,6 @@ def set_default_provider(value: dict[str, Any] | None) -> None:
 
 # The failed-list for tool call that
 # tuple: function-name, arguments, output, message
-_tool_call_failed_lists: dict[str, list[tuple[str, str, str, str]]] = {}
 
 
 def get_skill_dirs(use_kaos_path: bool = True) -> list[Any]:
