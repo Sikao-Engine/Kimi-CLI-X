@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -17,6 +17,12 @@ from kimix.cot import (
     cot_prompt_with_verification,
     cot_prompt_with_verification_async,
 )
+
+
+@pytest.fixture(autouse=True)
+def mock_cot_session():
+    with patch("kimix.cot.get_default_session", return_value=MagicMock()):
+        yield
 
 
 class TestBuildPrompt:
@@ -116,13 +122,14 @@ class TestParseResponse:
 class TestCotPromptAsync:
     @pytest.mark.asyncio
     async def test_basic_async(self) -> None:
-        async def callback(prompt: str) -> str:
+        async def mock_prompt(prompt_str: str, session: Any) -> str:
             return (
-                f"<thinking>received: {prompt[:20]}...</thinking>"
+                f"<thinking>received: {prompt_str[:20]}...</thinking>"
                 f"<quit/>"
             )
 
-        result = await cot_prompt_async("hello", llm_callback=callback)
+        with patch("kimix.cot._prompt_to_text_async", side_effect=mock_prompt):
+            result = await cot_prompt_async("hello")
         assert isinstance(result, CoTResult)
         assert "received:" in result.thinking
         assert result.quit is True
@@ -131,11 +138,12 @@ class TestCotPromptAsync:
     async def test_self_verify_false(self) -> None:
         calls: list[str] = []
 
-        async def callback(prompt: str) -> str:
-            calls.append(prompt)
+        async def mock_prompt(prompt_str: str, session: Any) -> str:
+            calls.append(prompt_str)
             return "<thinking>t</thinking><quit/>"
 
-        result = await cot_prompt_async("q", llm_callback=callback, self_verify=False)
+        with patch("kimix.cot._prompt_to_text_async", side_effect=mock_prompt):
+            result = await cot_prompt_async("q", self_verify=False)
         assert "Review your reasoning" not in calls[0]
         assert result.thinking == "t"
         assert result.quit is True
@@ -144,30 +152,33 @@ class TestCotPromptAsync:
     async def test_self_verify_true(self) -> None:
         calls: list[str] = []
 
-        async def callback(prompt: str) -> str:
-            calls.append(prompt)
+        async def mock_prompt(prompt_str: str, session: Any) -> str:
+            calls.append(prompt_str)
             return "<thinking>t</thinking><quit/>"
 
-        await cot_prompt_async("q", llm_callback=callback, self_verify=True)
+        with patch("kimix.cot._prompt_to_text_async", side_effect=mock_prompt):
+            await cot_prompt_async("q", self_verify=True)
         assert "Review your reasoning" in calls[0]
 
     @pytest.mark.asyncio
     async def test_existing_thinking_passed(self) -> None:
-        async def callback(prompt: str) -> str:
-            assert "Continue from the prior thinking" in prompt
-            assert "old thought" in prompt
+        async def mock_prompt(prompt_str: str, session: Any) -> str:
+            assert "Continue from the prior thinking" in prompt_str
+            assert "old thought" in prompt_str
             return "<thinking>new</thinking><quit/>"
 
-        result = await cot_prompt_async(
-            "q", llm_callback=callback, existing_thinking="old thought"
-        )
+        with patch("kimix.cot._prompt_to_text_async", side_effect=mock_prompt):
+            result = await cot_prompt_async(
+                "q", existing_thinking="old thought"
+            )
         assert result.thinking == "new"
         assert result.quit is True
 
     @pytest.mark.asyncio
     async def test_async_mock_callback(self) -> None:
         mock = AsyncMock(return_value="<thinking>t</thinking><quit/>")
-        result = await cot_prompt_async("q", llm_callback=mock)
+        with patch("kimix.cot._prompt_to_text_async", side_effect=mock):
+            result = await cot_prompt_async("q")
         mock.assert_awaited_once()
         assert result.thinking == "t"
         assert result.quit is True
@@ -175,30 +186,33 @@ class TestCotPromptAsync:
 
 class TestCotPromptSync:
     def test_basic_sync(self) -> None:
-        def callback(prompt: str) -> str:
+        def mock_prompt(prompt_str: str, session: Any) -> str:
             return "<thinking>sync t</thinking><quit/>"
 
-        result = cot_prompt("hello", llm_callback=callback)
+        with patch("kimix.cot._prompt_to_text", side_effect=mock_prompt):
+            result = cot_prompt("hello")
         assert result.thinking == "sync t"
         assert result.quit is True
 
     def test_existing_thinking_sync(self) -> None:
-        def callback(prompt: str) -> str:
-            assert "Continue from the prior thinking" in prompt
+        def mock_prompt(prompt_str: str, session: Any) -> str:
+            assert "Continue from the prior thinking" in prompt_str
             return "<thinking>t</thinking><quit/>"
 
-        result = cot_prompt("q", llm_callback=callback, existing_thinking="prior")
+        with patch("kimix.cot._prompt_to_text", side_effect=mock_prompt):
+            result = cot_prompt("q", existing_thinking="prior")
         assert result.thinking == "t"
         assert result.quit is True
 
     def test_self_verify_sync(self) -> None:
         calls: list[str] = []
 
-        def callback(prompt: str) -> str:
-            calls.append(prompt)
+        def mock_prompt(prompt_str: str, session: Any) -> str:
+            calls.append(prompt_str)
             return "<thinking>t</thinking><quit/>"
 
-        cot_prompt("q", llm_callback=callback, self_verify=True)
+        with patch("kimix.cot._prompt_to_text", side_effect=mock_prompt):
+            cot_prompt("q", self_verify=True)
         assert "Review your reasoning" in calls[0]
 
 
@@ -207,13 +221,14 @@ class TestCotPromptWithVerificationAsync:
     async def test_two_pass(self) -> None:
         calls: list[str] = []
 
-        async def callback(prompt: str) -> str:
-            calls.append(prompt)
+        async def mock_prompt(prompt_str: str, session: Any) -> str:
+            calls.append(prompt_str)
             if len(calls) == 1:
                 return "<thinking>first</thinking><quit/>"
             return "<thinking>second</thinking><quit/>"
 
-        result = await cot_prompt_with_verification_async("q", llm_callback=callback)
+        with patch("kimix.cot._prompt_to_text_async", side_effect=mock_prompt):
+            result = await cot_prompt_with_verification_async("q")
         assert len(calls) == 2
         assert "first" in calls[1]
         assert result.thinking == "second"
@@ -223,11 +238,12 @@ class TestCotPromptWithVerificationAsync:
     async def test_short_circuit_on_empty_thinking(self) -> None:
         calls: list[str] = []
 
-        async def callback(prompt: str) -> str:
-            calls.append(prompt)
+        async def mock_prompt(prompt_str: str, session: Any) -> str:
+            calls.append(prompt_str)
             return "<quit/>"
 
-        result = await cot_prompt_with_verification_async("q", llm_callback=callback)
+        with patch("kimix.cot._prompt_to_text_async", side_effect=mock_prompt):
+            result = await cot_prompt_with_verification_async("q")
         assert len(calls) == 1
         assert result.thinking == ""
         assert result.quit is True
@@ -236,13 +252,14 @@ class TestCotPromptWithVerificationAsync:
     async def test_uses_existing_thinking(self) -> None:
         calls: list[str] = []
 
-        async def callback(prompt: str) -> str:
-            calls.append(prompt)
+        async def mock_prompt(prompt_str: str, session: Any) -> str:
+            calls.append(prompt_str)
             return "<thinking>refined</thinking><quit/>"
 
-        result = await cot_prompt_with_verification_async(
-            "q", llm_callback=callback, existing_thinking="prior"
-        )
+        with patch("kimix.cot._prompt_to_text_async", side_effect=mock_prompt):
+            result = await cot_prompt_with_verification_async(
+                "q", existing_thinking="prior"
+            )
         assert "prior" in calls[0]
         assert result.thinking == "refined"
         assert result.quit is True
@@ -252,13 +269,14 @@ class TestCotPromptWithVerificationSync:
     def test_two_pass_sync(self) -> None:
         calls: list[str] = []
 
-        def callback(prompt: str) -> str:
-            calls.append(prompt)
+        def mock_prompt(prompt_str: str, session: Any) -> str:
+            calls.append(prompt_str)
             if len(calls) == 1:
                 return "<thinking>init</thinking><quit/>"
             return "<thinking>final</thinking><quit/>"
 
-        result = cot_prompt_with_verification("q", llm_callback=callback)
+        with patch("kimix.cot._prompt_to_text", side_effect=mock_prompt):
+            result = cot_prompt_with_verification("q")
         assert len(calls) == 2
         assert result.thinking == "final"
         assert result.quit is True
@@ -266,11 +284,12 @@ class TestCotPromptWithVerificationSync:
     def test_short_circuit_sync(self) -> None:
         calls: list[str] = []
 
-        def callback(prompt: str) -> str:
-            calls.append(prompt)
+        def mock_prompt(prompt_str: str, session: Any) -> str:
+            calls.append(prompt_str)
             return "<quit/>"
 
-        result = cot_prompt_with_verification("q", llm_callback=callback)
+        with patch("kimix.cot._prompt_to_text", side_effect=mock_prompt):
+            result = cot_prompt_with_verification("q")
         assert len(calls) == 1
         assert result.thinking == ""
         assert result.quit is True
@@ -279,44 +298,48 @@ class TestCotPromptWithVerificationSync:
 class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_empty_response_async(self) -> None:
-        async def callback(prompt: str) -> str:
+        async def mock_prompt(prompt_str: str, session: Any) -> str:
             return ""
 
-        result = await cot_prompt_async("q", llm_callback=callback)
+        with patch("kimix.cot._prompt_to_text_async", side_effect=mock_prompt):
+            result = await cot_prompt_async("q")
         assert result.thinking == ""
         assert result.quit is False
 
     def test_empty_response_sync(self) -> None:
-        def callback(prompt: str) -> str:
+        def mock_prompt(prompt_str: str, session: Any) -> str:
             return ""
 
-        result = cot_prompt("q", llm_callback=callback)
+        with patch("kimix.cot._prompt_to_text", side_effect=mock_prompt):
+            result = cot_prompt("q")
         assert result.thinking == ""
         assert result.quit is False
 
     @pytest.mark.asyncio
     async def test_multiple_thinking_tags(self) -> None:
         """Only the first occurrence should be captured."""
-        async def callback(prompt: str) -> str:
+        async def mock_prompt(prompt_str: str, session: Any) -> str:
             return (
                 "<thinking>first</thinking>"
                 "<thinking>second</thinking>"
                 "<quit/>"
             )
 
-        result = await cot_prompt_async("q", llm_callback=callback)
+        with patch("kimix.cot._prompt_to_text_async", side_effect=mock_prompt):
+            result = await cot_prompt_async("q")
         assert result.thinking == "first"
         assert result.quit is True
 
     @pytest.mark.asyncio
     async def test_multiple_quit_tags(self) -> None:
-        async def callback(prompt: str) -> str:
+        async def mock_prompt(prompt_str: str, session: Any) -> str:
             return (
                 "<thinking>t</thinking>"
                 "<quit/>"
                 "<quit/>"
             )
 
-        result = await cot_prompt_async("q", llm_callback=callback)
+        with patch("kimix.cot._prompt_to_text_async", side_effect=mock_prompt):
+            result = await cot_prompt_async("q")
         assert result.thinking == "t"
         assert result.quit is True

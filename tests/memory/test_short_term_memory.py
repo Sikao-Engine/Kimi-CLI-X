@@ -70,3 +70,5 @@ class TestShortTermMemory:
         entry = MemoryEntry(content="test", memory_type=MemoryType.SEMANTIC)
         stm.add(entry)
         assert entry.memory_type == MemoryType.EPISODIC
+
+

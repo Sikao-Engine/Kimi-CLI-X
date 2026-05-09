@@ -48,3 +48,5 @@ class TestEmbeddingProvider:
         provider = EmbeddingProvider(dim=2)
         sim = provider.similarity([0.0, 0.0], [1.0, 0.0])
         assert sim == 0.0
+
+

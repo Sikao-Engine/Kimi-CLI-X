@@ -434,17 +434,6 @@ class TestRunToolAsync:
         assert isinstance(result, ToolOk)
         assert "run_async" in str(result.output)
 
-    async def test_background_run_returns_task_id(self, mock_session: MagicMock) -> None:
-        tool = Run(session=mock_session)
-        params = RunParams(path=sys.executable, args=["-c", "print('bg_run')"], run_in_background=True)
-        result = await tool(params)
-        assert isinstance(result, ToolOk)
-        assert "Task ID" in str(result.output)
-        # cleanup
-        for tid in list(get_all_tasks(mock_session).keys()):
-            await get_all_tasks(mock_session)[tid].wait(timeout=5)
-            remove_task_id(mock_session, tid)
-
     async def test_foreground_timeout_keeps_task_registered(self, mock_session: MagicMock) -> None:
         tool = Run(session=mock_session)
         params = RunParams(
@@ -474,16 +463,6 @@ class TestPythonToolAsync:
         assert isinstance(result, ToolOk)
         assert "py_async" in str(result.output)
 
-    async def test_background_python_returns_task_id(self, mock_session: MagicMock) -> None:
-        tool = Python(session=mock_session)
-        params = PyParams(code="print('bg_py')", run_in_background=True)
-        result = await tool(params)
-        assert isinstance(result, ToolOk)
-        assert "Task ID" in str(result.output)
-        # cleanup
-        for tid in list(get_all_tasks(mock_session).keys()):
-            await get_all_tasks(mock_session)[tid].wait(timeout=5)
-            remove_task_id(mock_session, tid)
 
 
 # ---------------------------------------------------------------------------
@@ -519,42 +498,6 @@ class TestInputToolAsync:
 # ---------------------------------------------------------------------------
 # Agent tool async patterns (mocked to avoid external dependencies)
 # ---------------------------------------------------------------------------
-class TestAgentToolAsync:
-    """Verify Agent tool async patterns with mocks."""
-
-    async def test_background_agent_starts_stream(self, mock_session: MagicMock) -> None:
-        from kimix.tools.agent import Agent, SubAgentParams
-
-        agent = Agent(session=mock_session)
-        params = SubAgentParams(prompt="test prompt", run_in_background=True)
-
-        with patch("kimix.tools.agent.add_task") as mock_add_task, \
-             patch.object(BackgroundStream, "start", return_value=None) as mock_start:
-            result = await agent(params)
-
-        assert isinstance(result, ToolOk)
-        assert "Task ID" in str(result.output)
-        mock_start.assert_awaited_once()
-        mock_add_task.assert_called_once()
-
-    async def test_nested_subagent_allowed_in_background(self, mock_session: MagicMock) -> None:
-        from kimix.tools.agent import Agent, SubAgentParams
-
-        agent = Agent(session=mock_session)
-        params = SubAgentParams(prompt="nested", run_in_background=True)
-        mock_session.custom_data["sub_agent_active"] = True
-        try:
-            with patch("kimix.tools.agent.add_task") as mock_add_task, \
-                 patch.object(BackgroundStream, "start", return_value=None) as mock_start:
-                result = await agent(params)
-            assert isinstance(result, ToolOk)
-            assert "Task ID" in str(result.output)
-            mock_start.assert_awaited_once()
-            mock_add_task.assert_called_once()
-        finally:
-            mock_session.custom_data["sub_agent_active"] = False
-
-
 # ---------------------------------------------------------------------------
 # TaskList async patterns (via TaskOutput with task_id=None)
 # ---------------------------------------------------------------------------

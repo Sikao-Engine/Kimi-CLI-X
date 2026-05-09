@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import heapq
 import math
 import struct
@@ -82,10 +83,18 @@ class InvertedIndex:
         "_terms_by_length",
         "_terms_by_length_prefix",
         "_symmetric_delete_index",
+        "_doc_term_freqs",
+        "_doc_token_strs",
+        "_collection_lm_cache",
+        "_posting_docs_data",
+        "_posting_docs_ptr",
+        "_posting_tfs_data",
+        "_posting_tfs_ptr",
+        "_term_collection_freqs",
     )
 
     _MAGIC = b"KIMX"
-    _VERSION = 1
+    _VERSION = 2
 
     def __init__(self) -> None:
         self._term_to_id: dict[str, int] = {}
@@ -101,6 +110,14 @@ class InvertedIndex:
         self._terms_by_length: dict[int, tuple[str, ...]] = {}
         self._terms_by_length_prefix: dict[tuple[int, str], tuple[str, ...]] = {}
         self._symmetric_delete_index: dict[int, dict[str, tuple[str, ...]]] = {}
+        self._doc_term_freqs: list[dict[str, int]] = []
+        self._doc_token_strs: list[set[str]] = []
+        self._collection_lm_cache: dict[str, float] | None = None
+        self._posting_docs_data: NDArray[np.int32] = np.array([], dtype=np.int32)
+        self._posting_docs_ptr: NDArray[np.int32] = np.array([0], dtype=np.int32)
+        self._posting_tfs_data: NDArray[np.uint16] = np.array([], dtype=np.uint16)
+        self._posting_tfs_ptr: NDArray[np.int32] = np.array([0], dtype=np.int32)
+        self._term_collection_freqs: list[int] = []
 
     @property
     def N(self) -> int:
@@ -125,6 +142,7 @@ class InvertedIndex:
         counter = Counter(tokens)
         self._doc_lengths.append(len(tokens))
         self._sum_doc_lengths += len(tokens)
+        self._doc_term_freqs.append(dict(counter))
         for token, freq in counter.items():
             if token not in self._term_to_id:
                 self._term_to_id[token] = len(self._term_to_id)
@@ -153,7 +171,7 @@ class InvertedIndex:
             deletes |= new_deletes
         return deletes
 
-    def _build_symmetric_delete_index(self) -> None:
+    def _build_symmetric_delete_index(self, sd_max_len: int = 8) -> None:
         """Build Symmetric Delete indices for max_edits 1 and 2."""
         if not self._term_to_id:
             self._symmetric_delete_index = {1: {}, 2: {}}
@@ -161,12 +179,13 @@ class InvertedIndex:
         sd1: dict[str, list[str]] = defaultdict(list)
         sd2: dict[str, list[str]] = defaultdict(list)
         for term in self._term_to_id:
-            for variant in self._generate_deletes(term, 1):
-                if variant != term:
-                    sd1[variant].append(term)
-            for variant in self._generate_deletes(term, 2):
-                if variant != term:
-                    sd2[variant].append(term)
+            if len(term) <= sd_max_len:
+                for variant in self._generate_deletes(term, 1):
+                    if variant != term:
+                        sd1[variant].append(term)
+                for variant in self._generate_deletes(term, 2):
+                    if variant != term:
+                        sd2[variant].append(term)
         self._symmetric_delete_index = {
             1: {k: tuple(v) for k, v in sd1.items()},
             2: {k: tuple(v) for k, v in sd2.items()},
@@ -177,9 +196,11 @@ class InvertedIndex:
         if self._finalized:
             return
 
-        self._posting_docs = []
-        self._posting_tfs = []
         kept_terms: dict[str, int] = {}
+        docs_list: list[NDArray[np.int32]] = []
+        tfs_list: list[NDArray[np.uint16]] = []
+        docs_ptr = [0]
+        tfs_ptr = [0]
 
         for token, postings in self._temp_postings.items():
             df = len(postings)
@@ -191,18 +212,23 @@ class InvertedIndex:
             kept_terms[token] = tid
             if len(postings) == 1:
                 doc_id, freq = postings[0]
-                self._posting_docs.append(np.array([doc_id], dtype=np.int32))
-                self._posting_tfs.append(np.array([freq], dtype=np.uint16))
+                docs_arr = np.array([doc_id], dtype=np.int32)
+                tfs_arr = np.array([freq], dtype=np.uint16)
             else:
                 postings.sort(key=lambda p: p[0])
-                self._posting_docs.append(
-                    np.fromiter((p[0] for p in postings), dtype=np.int32, count=len(postings))
-                )
-                self._posting_tfs.append(
-                    np.fromiter((p[1] for p in postings), dtype=np.uint16, count=len(postings))
-                )
+                docs_arr = np.fromiter((p[0] for p in postings), dtype=np.int32, count=len(postings))
+                tfs_arr = np.fromiter((p[1] for p in postings), dtype=np.uint16, count=len(postings))
+            docs_list.append(docs_arr)
+            tfs_list.append(tfs_arr)
+            docs_ptr.append(docs_ptr[-1] + len(docs_arr))
+            tfs_ptr.append(tfs_ptr[-1] + len(tfs_arr))
 
         self._term_to_id = kept_terms
+        self._posting_docs_data = np.concatenate(docs_list) if docs_list else np.array([], dtype=np.int32)
+        self._posting_tfs_data = np.concatenate(tfs_list) if tfs_list else np.array([], dtype=np.uint16)
+        self._posting_docs_ptr = np.array(docs_ptr, dtype=np.int32)
+        self._posting_tfs_ptr = np.array(tfs_ptr, dtype=np.int32)
+
         by_len: dict[int, list[str]] = defaultdict(list)
         by_len_prefix: dict[tuple[int, str], list[str]] = defaultdict(list)
         for term in kept_terms:
@@ -214,6 +240,30 @@ class InvertedIndex:
         if self._doc_lengths:
             self._avgdl = self._sum_doc_lengths / len(self._doc_lengths)
             self._doc_lengths_arr = np.array(self._doc_lengths, dtype=np.int32)
+
+        # Build forward index (filter pruned terms)
+        self._doc_token_strs = [
+            {t for t in doc_freqs if t in kept_terms}
+            for doc_freqs in self._doc_term_freqs
+        ]
+        self._doc_term_freqs = [
+            {t: f for t, f in doc_freqs.items() if t in kept_terms}
+            for doc_freqs in self._doc_term_freqs
+        ]
+
+        # Pre-compute collection LM and term collection frequencies
+        self._term_collection_freqs = [0] * len(kept_terms)
+        if self._sum_doc_lengths > 0:
+            self._collection_lm_cache = {}
+            for term, tid in kept_terms.items():
+                start = self._posting_tfs_ptr[tid]
+                end = self._posting_tfs_ptr[tid + 1]
+                cf = int(self._posting_tfs_data[start:end].sum())
+                self._term_collection_freqs[tid] = cf
+                self._collection_lm_cache[term] = cf / self._sum_doc_lengths
+        else:
+            self._collection_lm_cache = {}
+
         self._build_symmetric_delete_index()
         self._temp_postings.clear()
         self._finalized = True
@@ -227,7 +277,11 @@ class InvertedIndex:
         tid = self._term_to_id.get(term)
         if tid is None:
             return None
-        return self._posting_docs[tid], self._posting_tfs[tid]
+        start = self._posting_docs_ptr[tid]
+        end = self._posting_docs_ptr[tid + 1]
+        docs = self._posting_docs_data[start:end]
+        tfs = self._posting_tfs_data[start:end]
+        return docs, tfs
 
     def doc_freq(self, term: str) -> int:
         """Document frequency of *term*."""
@@ -242,7 +296,7 @@ class InvertedIndex:
     def terms(self) -> Iterable[str]:
         return self._term_to_id.keys()
 
-    def save(self, path: str | Path) -> None:
+    def save(self, path: str | Path, include_forward_index: bool = False) -> None:
         """Persist the index to disk in a compact binary format."""
         if not self._finalized:
             self.finalize()
@@ -274,15 +328,31 @@ class InvertedIndex:
                 f.write(np.array(self._doc_lengths, dtype=np.int32).tobytes())
 
             # Posting lists (in term_id order)
-            for term in terms:
+            for i, term in enumerate(terms):
                 tid = term_ids[term]
-                docs = self._posting_docs[tid]
-                tfs = self._posting_tfs[tid]
+                start = self._posting_docs_ptr[tid]
+                end = self._posting_docs_ptr[tid + 1]
+                docs = self._posting_docs_data[start:end]
+                tfs = self._posting_tfs_data[start:end]
                 df = len(docs)
                 f.write(struct.pack("<I", df))
                 if df:
                     f.write(docs.tobytes())
                     f.write(tfs.tobytes())
+
+            # Optional forward-index chunk for fast load
+            if include_forward_index:
+                for doc_id in range(num_docs):
+                    term_freqs = (
+                        self._doc_term_freqs[doc_id]
+                        if doc_id < len(self._doc_term_freqs)
+                        else {}
+                    )
+                    f.write(struct.pack("<H", len(term_freqs)))
+                    for term, tf in term_freqs.items():
+                        tid = term_ids[term]
+                        f.write(struct.pack("<I", tid))
+                        f.write(struct.pack("<H", tf))
 
     def load(self, path: str | Path) -> None:
         """Load a persisted index from disk."""
@@ -292,7 +362,7 @@ class InvertedIndex:
             if magic != self._MAGIC:
                 raise ValueError(f"Invalid file format: expected {self._MAGIC!r}, got {magic!r}")
             version = struct.unpack("<B", f.read(1))[0]
-            if version != self._VERSION:
+            if version not in (1, self._VERSION):
                 raise ValueError(f"Unsupported version: {version}")
 
             self._N = struct.unpack("<I", f.read(4))[0]
@@ -317,8 +387,10 @@ class InvertedIndex:
             self._sum_doc_lengths = sum(self._doc_lengths)
             self._doc_lengths_arr = np.array(self._doc_lengths, dtype=np.int32)
 
-            self._posting_docs = []
-            self._posting_tfs = []
+            docs_list: list[NDArray[np.int32]] = []
+            tfs_list: list[NDArray[np.uint16]] = []
+            docs_ptr = [0]
+            tfs_ptr = [0]
             for _ in range(num_terms):
                 df = struct.unpack("<I", f.read(4))[0]
                 if df:
@@ -327,8 +399,39 @@ class InvertedIndex:
                 else:
                     docs = np.array([], dtype=np.int32)
                     tfs = np.array([], dtype=np.uint16)
-                self._posting_docs.append(docs)
-                self._posting_tfs.append(tfs)
+                docs_list.append(docs)
+                tfs_list.append(tfs)
+                docs_ptr.append(docs_ptr[-1] + df)
+                tfs_ptr.append(tfs_ptr[-1] + df)
+            self._posting_docs_data = np.concatenate(docs_list) if docs_list else np.array([], dtype=np.int32)
+            self._posting_tfs_data = np.concatenate(tfs_list) if tfs_list else np.array([], dtype=np.uint16)
+            self._posting_docs_ptr = np.array(docs_ptr, dtype=np.int32)
+            self._posting_tfs_ptr = np.array(tfs_ptr, dtype=np.int32)
+
+            # Try to read optional forward-index chunk (v2 only)
+            has_forward_chunk = False
+            doc_token_strs_chunk: list[set[str]] = []
+            doc_term_freqs_chunk: list[dict[str, int]] = []
+            if version >= 2:
+                pos = f.tell()
+                f.seek(0, 2)
+                end = f.tell()
+                f.seek(pos)
+                has_forward_chunk = end > pos
+                if has_forward_chunk:
+                    doc_token_strs_chunk = [set() for _ in range(num_docs)]
+                    doc_term_freqs_chunk = [dict() for _ in range(num_docs)]
+                    for d in range(num_docs):
+                        num_terms_data = f.read(2)
+                        if len(num_terms_data) < 2:
+                            break
+                        num_terms_doc = struct.unpack("<H", num_terms_data)[0]
+                        for _ in range(num_terms_doc):
+                            tid = struct.unpack("<I", f.read(4))[0]
+                            tf = struct.unpack("<H", f.read(2))[0]
+                            term = terms[tid]
+                            doc_token_strs_chunk[d].add(term)
+                            doc_term_freqs_chunk[d][term] = tf
 
         by_len: dict[int, list[str]] = defaultdict(list)
         by_len_prefix: dict[tuple[int, str], list[str]] = defaultdict(list)
@@ -338,6 +441,45 @@ class InvertedIndex:
             by_len_prefix[(length, term[:1])].append(term)
         self._terms_by_length = {length: tuple(terms) for length, terms in by_len.items()}
         self._terms_by_length_prefix = {key: tuple(terms) for key, terms in by_len_prefix.items()}
+
+        n_docs = len(self._doc_lengths)
+        self._term_collection_freqs = [0] * num_terms
+        total_tokens = self._sum_doc_lengths
+        if total_tokens > 0:
+            self._collection_lm_cache = {}
+        else:
+            self._collection_lm_cache = {}
+
+        if has_forward_chunk:
+            self._doc_token_strs = doc_token_strs_chunk
+            self._doc_term_freqs = doc_term_freqs_chunk
+            for term, tid in self._term_to_id.items():
+                start = self._posting_tfs_ptr[tid]
+                end = self._posting_tfs_ptr[tid + 1]
+                tfs = self._posting_tfs_data[start:end]
+                cf = int(tfs.sum()) if len(tfs) else 0
+                self._term_collection_freqs[tid] = cf
+                if total_tokens > 0:
+                    self._collection_lm_cache[term] = cf / total_tokens
+        else:
+            # Rebuild forward index and collection LM from loaded postings
+            self._doc_token_strs = [set() for _ in range(n_docs)]
+            self._doc_term_freqs = [dict() for _ in range(n_docs)]
+            for term, tid in self._term_to_id.items():
+                start = self._posting_docs_ptr[tid]
+                end = self._posting_docs_ptr[tid + 1]
+                docs = self._posting_docs_data[start:end]
+                tfs = self._posting_tfs_data[start:end]
+                cf = int(tfs.sum()) if len(tfs) else 0
+                self._term_collection_freqs[tid] = cf
+                if total_tokens > 0:
+                    self._collection_lm_cache[term] = cf / total_tokens
+                docs_list = docs.tolist()
+                tfs_list = tfs.tolist()
+                for d_int, tf_int in zip(docs_list, tfs_list):
+                    if d_int < n_docs:
+                        self._doc_token_strs[d_int].add(term)
+                        self._doc_term_freqs[d_int][term] = tf_int
         self._build_symmetric_delete_index()
         self._finalized = True
 
@@ -381,6 +523,49 @@ class BM25Scorer:
             self._denom_buf = np.empty(new_size, dtype=np.float64)
         return self._tfs_buf, self._denom_buf
 
+    def _prepare_candidates(self, candidate_docs):
+        if candidate_docs is None:
+            return None
+        if isinstance(candidate_docs, np.ndarray):
+            return candidate_docs
+        return np.array(sorted(candidate_docs), dtype=np.int32)
+
+    def _token_scores(
+        self,
+        token: str,
+        q_weight: float,
+        candidate_docs: NDArray[np.int32] | None,
+    ) -> tuple[NDArray[np.int32], NDArray[np.float64]]:
+        """Return (doc_ids, score_deltas) for a single query token."""
+        postings = self.index.get_postings(token)
+        if postings is None:
+            return np.array([], dtype=np.int32), np.array([], dtype=np.float64)
+        docs, tfs = postings
+        if candidate_docs is not None:
+            if len(candidate_docs) <= 256:
+                idx = np.searchsorted(candidate_docs, docs)
+                idx = np.clip(idx, 0, len(candidate_docs) - 1)
+                valid = candidate_docs[idx] == docs
+            else:
+                valid = np.isin(docs, candidate_docs)
+            if not np.any(valid):
+                return np.array([], dtype=np.int32), np.array([], dtype=np.float64)
+            docs = docs[valid]
+            tfs = tfs[valid]
+        df = len(docs)
+        if df == 0:
+            return np.array([], dtype=np.int32), np.array([], dtype=np.float64)
+        idf = self._idf(df, self.index.N)
+        n = len(docs)
+        tfs_buf, denom_buf = self._ensure_buffers(n)
+        tfs_f = tfs_buf[:n]
+        denom = denom_buf[:n]
+        tfs_f[:] = tfs
+        np.add(tfs_f, self._denom_base[docs], out=denom)
+        tfs_f *= idf * (self.k1 + 1.0) * q_weight
+        np.divide(tfs_f, denom, out=tfs_f)
+        return docs, tfs_f
+
     def _accumulate(
         self,
         query_tokens: list[str],
@@ -393,58 +578,12 @@ class BM25Scorer:
         if candidate_docs is not None and len(candidate_docs) == 0:
             return scores_arr
 
-        k1_plus_1 = self.k1 + 1.0
-        denom_base = self._denom_base
+        cand_sorted = self._prepare_candidates(candidate_docs)
         token_counts = Counter(query_tokens)
-
-        if candidate_docs is not None:
-            cand_sorted = np.array(sorted(candidate_docs), dtype=np.int32)
-            for token, q_weight in token_counts.items():
-                postings = self.index.get_postings(token)
-                if postings is None:
-                    continue
-                docs, tfs = postings
-                if len(cand_sorted) <= 256:
-                    idx = np.searchsorted(cand_sorted, docs)
-                    idx = np.clip(idx, 0, len(cand_sorted) - 1)
-                    valid = cand_sorted[idx] == docs
-                else:
-                    valid = np.isin(docs, cand_sorted)
-                if not np.any(valid):
-                    continue
-                docs = docs[valid]
-                tfs = tfs[valid]
-                df = len(docs)
-                if df == 0:
-                    continue
-                idf = self._idf(df, N)
-                n = len(docs)
-                tfs_buf, denom_buf = self._ensure_buffers(n)
-                tfs_f = tfs_buf[:n]
-                denom = denom_buf[:n]
-                tfs_f[:] = tfs
-                np.add(tfs_f, denom_base[docs], out=denom)
-                tfs_f *= idf * k1_plus_1 * q_weight
-                np.divide(tfs_f, denom, out=tfs_f)
-                scores_arr[docs] += tfs_f
-        else:
-            for token, q_weight in token_counts.items():
-                postings = self.index.get_postings(token)
-                if postings is None:
-                    continue
-                docs, tfs = postings
-                df = len(docs)
-                idf = self._idf(df, N)
-                n = len(docs)
-                tfs_buf, denom_buf = self._ensure_buffers(n)
-                tfs_f = tfs_buf[:n]
-                denom = denom_buf[:n]
-                tfs_f[:] = tfs
-                np.add(tfs_f, denom_base[docs], out=denom)
-                tfs_f *= idf * k1_plus_1 * q_weight
-                np.divide(tfs_f, denom, out=tfs_f)
-                scores_arr[docs] += tfs_f
-
+        for token, q_weight in token_counts.items():
+            docs, scores = self._token_scores(token, q_weight, cand_sorted)
+            if len(docs):
+                scores_arr[docs] += scores
         return scores_arr
 
     def _accumulate_sparse(
@@ -459,62 +598,12 @@ class BM25Scorer:
         if candidate_docs is not None and len(candidate_docs) == 0:
             return scores
 
-        k1_plus_1 = self.k1 + 1.0
-        denom_base = self._denom_base
+        cand_sorted = self._prepare_candidates(candidate_docs)
         token_counts = Counter(query_tokens)
-
-        if candidate_docs is not None:
-            cand_sorted = np.array(sorted(candidate_docs), dtype=np.int32)
-            for token, q_weight in token_counts.items():
-                postings = self.index.get_postings(token)
-                if postings is None:
-                    continue
-                docs, tfs = postings
-                if len(cand_sorted) <= 256:
-                    idx = np.searchsorted(cand_sorted, docs)
-                    idx = np.clip(idx, 0, len(cand_sorted) - 1)
-                    valid = cand_sorted[idx] == docs
-                else:
-                    valid = np.isin(docs, cand_sorted)
-                if not np.any(valid):
-                    continue
-                docs = docs[valid]
-                tfs = tfs[valid]
-                df = len(docs)
-                if df == 0:
-                    continue
-                idf = self._idf(df, N)
-                n = len(docs)
-                tfs_buf, denom_buf = self._ensure_buffers(n)
-                tfs_f = tfs_buf[:n]
-                denom = denom_buf[:n]
-                tfs_f[:] = tfs
-                np.add(tfs_f, denom_base[docs], out=denom)
-                tfs_f *= idf * k1_plus_1 * q_weight
-                np.divide(tfs_f, denom, out=tfs_f)
-                for i in range(n):
-                    d = int(docs[i])
-                    scores[d] = scores.get(d, 0.0) + float(tfs_f[i])
-        else:
-            for token, q_weight in token_counts.items():
-                postings = self.index.get_postings(token)
-                if postings is None:
-                    continue
-                docs, tfs = postings
-                df = len(docs)
-                idf = self._idf(df, N)
-                n = len(docs)
-                tfs_buf, denom_buf = self._ensure_buffers(n)
-                tfs_f = tfs_buf[:n]
-                denom = denom_buf[:n]
-                tfs_f[:] = tfs
-                np.add(tfs_f, denom_base[docs], out=denom)
-                tfs_f *= idf * k1_plus_1 * q_weight
-                np.divide(tfs_f, denom, out=tfs_f)
-                for i in range(n):
-                    d = int(docs[i])
-                    scores[d] = scores.get(d, 0.0) + float(tfs_f[i])
-
+        for token, q_weight in token_counts.items():
+            docs, tfs_f = self._token_scores(token, q_weight, cand_sorted)
+            for d, score in zip(docs.tolist(), tfs_f.tolist()):
+                scores[d] = scores.get(d, 0.0) + score
         return scores
 
     def score(
@@ -554,10 +643,12 @@ class BM25Scorer:
             return []
 
         N = self.index.N
-        # Use sparse accumulation when N is large and top_k is small relative to N,
-        # or when candidate_docs is small
         cand_size = len(candidate_docs) if candidate_docs is not None else N
-        use_sparse = (N > 50000 and top_k < N // 20) or (cand_size < 5000 and N > 100000)
+        use_sparse = (
+            (N > 50000 and top_k < N // 20)
+            or (cand_size < 5000 and N > 100000)
+            or (top_k < N // 50)
+        )
 
         if use_sparse:
             scores = self._accumulate_sparse(query_tokens, candidate_docs)
@@ -583,7 +674,7 @@ class BM25Scorer:
 class LevenshteinAutomaton:
     """Damerau-Levenshtein automaton for fuzzy term expansion."""
 
-    __slots__ = ("pattern", "max_edits", "prefix_length", "_pattern_counts", "_pattern_counts_items")
+    __slots__ = ("pattern", "max_edits", "prefix_length", "_pattern_counts", "_pattern_counts_items", "_pattern_deletes")
 
     def __init__(
         self,
@@ -600,6 +691,7 @@ class LevenshteinAutomaton:
             pc[c] = pc.get(c, 0) + 1
         self._pattern_counts = pc
         self._pattern_counts_items = list(pc.items())
+        self._pattern_deletes: set[str] = InvertedIndex._generate_deletes(pattern, max_edits)
 
     @staticmethod
     def auto_fuzziness(term: str) -> int:
@@ -661,14 +753,21 @@ class LevenshteinAutomaton:
         total = 0
         matched = 0
         term_len = len(term)
-        # For short terms, str.count in C is very fast; for longer terms, Counter avoids
-        # repeated O(|term|) scans and wins when |alphabet| * |term| would be large.
-        if term_len <= 32:
+        if term_len <= 32 and len(self._pattern_counts_items) <= 32:
+            tc: dict[str, int] = {}
+            for ch in term:
+                tc[ch] = tc.get(ch, 0) + 1
             for c, pc in self._pattern_counts_items:
-                tc = term.count(c)
-                matched += tc
-                if pc != tc:
-                    total += abs(pc - tc)
+                tc_c = tc.get(c, 0)
+                matched += tc_c
+                if pc != tc_c:
+                    total += abs(pc - tc_c)
+        elif term_len <= 32:
+            for c, pc in self._pattern_counts_items:
+                tc_c = term.count(c)
+                matched += tc_c
+                if pc != tc_c:
+                    total += abs(pc - tc_c)
         else:
             tc = Counter(term)
             for c, pc in self._pattern_counts_items:
@@ -695,13 +794,11 @@ class LevenshteinAutomaton:
             sd = sd_index.get(max_edits) or sd_index.get(1, {})
             if sd:
                 candidates: set[str] = set()
-                for variant in InvertedIndex._generate_deletes(self.pattern, max_edits):
+                for variant in self._pattern_deletes:
                     if variant in sd:
                         candidates.update(sd[variant])
-                # Also include exact match
                 if dictionary.has_term(self.pattern):  # type: ignore[attr-defined]
                     candidates.add(self.pattern)
-                # Filter by prefix and length bounds, then verify
                 for term in candidates:
                     if len(results) >= max_expansions:
                         return results
@@ -800,6 +897,7 @@ class Searcher:
         "fuzziness",
         "max_expansions",
         "prefix_length",
+        "_expand_cache",
     )
 
     def __init__(
@@ -823,11 +921,12 @@ class Searcher:
         self.fuzziness = fuzziness
         self.max_expansions = max_expansions
         self.prefix_length = prefix_length
+        self._expand_cache: dict[tuple[str, str | int, int, int], list[str]] = {}
 
     @staticmethod
     def _is_latin_token(token: str) -> bool:
         """Heuristic: token is primarily Latin/ASCII."""
-        return bool(token) and all(ord(c) < 128 for c in token)
+        return bool(token) and token.isascii()
 
     def _expand_token(self, token: str) -> list[str]:
         """Fuzzy-expand a Latin token; CJK tokens are returned verbatim if present."""
@@ -842,13 +941,19 @@ class Searcher:
         if max_edits == 0:
             return [token] if self.index.has_term(token) else []
 
+        key = (token, self.fuzziness, self.prefix_length, self.max_expansions)
+        if key in self._expand_cache:
+            return self._expand_cache[key]
+
         automaton = LevenshteinAutomaton(
             token, max_edits=max_edits, prefix_length=self.prefix_length
         )
         matches = automaton.match(
             self.index, max_expansions=self.max_expansions
         )
-        return matches if matches else ([token] if self.index.has_term(token) else [])
+        result = matches if matches else ([token] if self.index.has_term(token) else [])
+        self._expand_cache[key] = result
+        return result
 
     def search(self, query: str, top_k: int = 10) -> list[tuple[int, float]]:
         """Run the full query pipeline and return top-k *(doc_id, score)* pairs."""
@@ -880,17 +985,26 @@ class Searcher:
             for expanded in token_expansions:
                 if not expanded:
                     continue
-                seen_docs: set[int] = set()
-                for term in expanded:
-                    postings = self.index.get_postings(term)
-                    if postings is None:
-                        continue
-                    docs, _ = postings
-                    for d in docs:
-                        d_int = int(d)
-                        if d_int not in seen_docs:
-                            seen_docs.add(d_int)
-                            doc_token_counts[d_int] = doc_token_counts.get(d_int, 0) + 1
+                all_docs = []
+                for t in expanded:
+                    postings = self.index.get_postings(t)
+                    if postings is not None:
+                        all_docs.append(postings[0])
+                if not all_docs:
+                    continue
+                total_len = sum(len(d) for d in all_docs)
+                if total_len > 512 or len(expanded) > 2:
+                    concat = np.concatenate(all_docs)
+                    unique_docs = np.unique(concat)
+                    for d_int in unique_docs.tolist():
+                        doc_token_counts[d_int] = doc_token_counts.get(d_int, 0) + 1
+                else:
+                    seen_docs: set[int] = set()
+                    for docs in all_docs:
+                        for d_int in docs.tolist():
+                            if d_int not in seen_docs:
+                                seen_docs.add(d_int)
+                                doc_token_counts[d_int] = doc_token_counts.get(d_int, 0) + 1
             if doc_token_counts:
                 candidate_docs = {
                     doc_id for doc_id, count in doc_token_counts.items()
@@ -911,3 +1025,1281 @@ class Searcher:
 
         expanded_tokens = list(dict.fromkeys(expanded_tokens))
         return self.scorer.score_topk(expanded_tokens, top_k=top_k, candidate_docs=candidate_docs)
+
+
+# ---------------------------------------------------------------------------
+# String similarity helpers (Jaro-Winkler, Sørensen-Dice)
+# ---------------------------------------------------------------------------
+
+
+def jaro_similarity(s: str, t: str) -> float:
+    """Return Jaro similarity between *s* and *t* (0.0–1.0)."""
+    if s == t:
+        return 1.0
+    len_s, len_t = len(s), len(t)
+    if len_s == 0 or len_t == 0:
+        return 0.0
+    match_distance = max(len_s, len_t) // 2 - 1
+    s_matches = [False] * len_s
+    t_matches = [False] * len_t
+    matches = 0
+    for i in range(len_s):
+        start = max(0, i - match_distance)
+        end = min(i + match_distance + 1, len_t)
+        for j in range(start, end):
+            if t_matches[j] or s[i] != t[j]:
+                continue
+            s_matches[i] = True
+            t_matches[j] = True
+            matches += 1
+            break
+    if matches == 0:
+        return 0.0
+    transpositions = 0
+    k = 0
+    for i in range(len_s):
+        if not s_matches[i]:
+            continue
+        while not t_matches[k]:
+            k += 1
+        if s[i] != t[k]:
+            transpositions += 1
+        k += 1
+    return (
+        matches / len_s
+        + matches / len_t
+        + (matches - transpositions / 2) / matches
+    ) / 3.0
+
+
+def jaro_winkler_similarity(s: str, t: str, p: float = 0.1, max_prefix: int = 4) -> float:
+    """Return Jaro–Winkler similarity, boosting prefix matches."""
+    jaro = jaro_similarity(s, t)
+    prefix = 0
+    for i in range(min(max_prefix, len(s), len(t))):
+        if s[i] == t[i]:
+            prefix += 1
+        else:
+            break
+    return jaro + prefix * p * (1 - jaro)
+
+
+def sorensen_dice_coefficient(s: str, t: str) -> float:
+    """Return Sørensen–Dice coefficient based on bigram overlap."""
+    if not s and not t:
+        return 1.0
+    if not s or not t:
+        return 0.0
+    s_bigrams = {s[i : i + 2] for i in range(len(s) - 1)}
+    t_bigrams = {t[i : i + 2] for i in range(len(t) - 1)}
+    intersection = len(s_bigrams & t_bigrams)
+    denom = len(s_bigrams) + len(t_bigrams)
+    return 0.0 if denom == 0 else 2.0 * intersection / denom
+
+
+def ngram_overlap(s: str, t: str, n: int = 2) -> float:
+    """Return n-gram overlap ratio (intersection / union)."""
+    if not s or not t:
+        return 0.0
+    s_grams = {s[i : i + n] for i in range(len(s) - n + 1)} if len(s) >= n else {s}
+    t_grams = {t[i : i + n] for i in range(len(t) - n + 1)} if len(t) >= n else {t}
+    union = s_grams | t_grams
+    if not union:
+        return 0.0
+    return len(s_grams & t_grams) / len(union)
+
+
+def jaccard_similarity_tokens(a: set[str], b: set[str]) -> float:
+    """Jaccard similarity for token sets."""
+    union = a | b
+    if not union:
+        return 0.0
+    return len(a & b) / len(union)
+
+
+# ---------------------------------------------------------------------------
+# SimHash – near-duplicate detection
+# ---------------------------------------------------------------------------
+
+
+class SimHash:
+    """Locality-sensitive hash for near-duplicate text detection."""
+
+    __slots__ = ("hashbits", "value")
+
+    def __init__(self, text: str = "", hashbits: int = 64) -> None:
+        self.hashbits = hashbits
+        self.value = self._compute(text)
+
+    @staticmethod
+    def _hash_token(token: str) -> int:
+        """Stable 64-bit hash for a token."""
+        digest = hashlib.md5(token.encode("utf-8")).digest()[:8]
+        return struct.unpack("<Q", digest)[0]
+
+    def _compute(self, text: str) -> int:
+        v = [0] * self.hashbits
+        for token in set(text.split()):
+            h = self._hash_token(token)
+            for i in range(self.hashbits):
+                v[i] += 1 if (h >> i) & 1 else -1
+        result = 0
+        for i in range(self.hashbits):
+            if v[i] > 0:
+                result |= 1 << i
+        return result
+
+    def distance(self, other: SimHash) -> int:
+        """Hamming distance between two SimHash values."""
+        return (self.value ^ other.value).bit_count()
+
+    def is_near_duplicate(self, other: SimHash, threshold: int = 3) -> bool:
+        return self.distance(other) <= threshold
+
+
+# ---------------------------------------------------------------------------
+# MMR – Maximal Marginal Relevance
+# ---------------------------------------------------------------------------
+
+
+def _doc_token_set(index: InvertedIndex, doc_id: int) -> set[str]:
+    """Recover the token set for *doc_id* from the forward index."""
+    if doc_id < len(index._doc_token_strs):
+        return index._doc_token_strs[doc_id].copy()
+    return set()
+
+
+def mmr_rerank(
+    results: list[tuple[int, float]],
+    index: InvertedIndex,
+    lambda_param: float = 0.5,
+    top_k: int | None = None,
+) -> list[tuple[int, float]]:
+    """Greedy MMR re-ranking over BM25 *results*.
+
+    ``lambda_param`` balances relevance (1.0 = pure relevance,
+    0.0 = pure diversity).  Token-set Jaccard is used as the
+    document–document similarity proxy.
+    """
+    if not results:
+        return []
+    if top_k is None:
+        top_k = len(results)
+
+    # Pre-compute token sets for all result docs
+    doc_tokens: dict[int, set[str]] = {}
+    for doc_id, _ in results:
+        doc_tokens[doc_id] = _doc_token_set(index, doc_id)
+
+    selected: list[tuple[int, float]] = []
+    remaining = list(results)
+
+    while remaining and len(selected) < top_k:
+        best_idx = -1
+        best_doc: tuple[int, float] | None = None
+        best_score = -float("inf")
+        for idx, (doc_id, relevance) in enumerate(remaining):
+            max_sim = 0.0
+            for sel_id, _ in selected:
+                sim = jaccard_similarity_tokens(doc_tokens[doc_id], doc_tokens[sel_id])
+                if sim > max_sim:
+                    max_sim = sim
+            score = lambda_param * relevance - (1.0 - lambda_param) * max_sim
+            if score > best_score:
+                best_score = score
+                best_doc = (doc_id, relevance)
+                best_idx = idx
+        if best_doc is None:
+            break
+        selected.append(best_doc)
+        remaining.pop(best_idx)
+    return selected
+
+
+# ---------------------------------------------------------------------------
+# RM3 – Pseudo-Relevance Feedback query expansion
+# ---------------------------------------------------------------------------
+
+
+class RM3Expander:
+    """RM3 pseudo-relevance feedback using top-k BM25 results."""
+
+    __slots__ = ("index", "scorer", "fb_docs", "fb_terms", "alpha")
+
+    def __init__(
+        self,
+        index: InvertedIndex,
+        scorer: BM25Scorer,
+        fb_docs: int = 3,
+        fb_terms: int = 10,
+        alpha: float = 0.5,
+    ) -> None:
+        self.index = index
+        self.scorer = scorer
+        self.fb_docs = fb_docs
+        self.fb_terms = fb_terms
+        self.alpha = alpha
+
+    def expand(self, query_tokens: list[str], top_k: int = 10) -> list[str]:
+        """Return an expanded token list mixing original query and feedback terms."""
+        if not query_tokens:
+            return []
+
+        results = self.scorer.score_topk(query_tokens, top_k=self.fb_docs)
+        if not results:
+            return query_tokens
+
+        doc_ids = {doc_id for doc_id, _ in results}
+
+        # Estimate term probabilities in feedback documents via forward index
+        term_scores: dict[str, float] = {}
+        total_tokens = 0
+        for doc_id in doc_ids:
+            if doc_id < len(self.index._doc_term_freqs):
+                for term, tf in self.index._doc_term_freqs[doc_id].items():
+                    term_scores[term] = term_scores.get(term, 0.0) + float(tf)
+                    total_tokens += tf
+
+        if total_tokens == 0:
+            return query_tokens
+
+        for term in term_scores:
+            term_scores[term] /= total_tokens
+
+        # Original query model
+        expanded: dict[str, float] = {}
+        for token in query_tokens:
+            expanded[token] = expanded.get(token, 0.0) + self.alpha / len(query_tokens)
+
+        # Feedback model
+        top_terms = heapq.nlargest(
+            self.fb_terms, term_scores.items(), key=lambda x: x[1]
+        )
+        for term, score in top_terms:
+            expanded[term] = expanded.get(term, 0.0) + (1.0 - self.alpha) * score
+
+        # Flatten to token list weighted by score (repetition ≈ weight)
+        result: list[str] = []
+        for term, weight in expanded.items():
+            count = max(1, int(weight * 10))
+            result.extend([term] * count)
+        return result
+
+
+# ---------------------------------------------------------------------------
+# LambdaMART – simplified listwise LTR (coordinate-ascent style)
+# ---------------------------------------------------------------------------
+
+
+def _dcg(scores: list[float] | np.ndarray) -> float:
+    arr = np.asarray(scores)
+    if arr.size == 0:
+        return 0.0
+    return float(np.sum((2.0 ** arr - 1.0) / np.log2(np.arange(2, arr.size + 2))))
+
+
+def _ideal_dcg(scores: list[float] | np.ndarray) -> float:
+    return _dcg(np.sort(np.asarray(scores))[::-1])
+
+
+def _ndcg(scores: list[float] | np.ndarray) -> float:
+    ideal = _ideal_dcg(scores)
+    return 0.0 if ideal == 0 else _dcg(scores) / ideal
+
+
+class LambdaMART:
+    """Simplified LambdaMART / Coordinate-Ascent rank learner.
+
+    Trains a linear weight vector over hand-crafted features to maximise
+    mean NDCG.  Inference is a single dot-product per document.
+    """
+
+    __slots__ = ("n_iterations", "learning_rate", "weights")
+
+    def __init__(self, n_iterations: int = 50, learning_rate: float = 0.05) -> None:
+        self.n_iterations = n_iterations
+        self.learning_rate = learning_rate
+        self.weights: list[float] = []
+
+    def fit(self, X: list[list[list[float]]], y: list[list[float]]) -> None:
+        """Fit on training data.
+
+        *X* – list of queries, each query is a list of doc-feature vectors.
+        *y* – list of queries, each query is a list of relevance grades.
+        """
+        if not X or not X[0]:
+            return
+        n_features = len(X[0][0])
+        self.weights = [0.0] * n_features
+        X_np = [np.asarray(xi, dtype=np.float64) for xi in X]
+        w_arr = np.zeros(n_features, dtype=np.float64)
+        for _ in range(self.n_iterations):
+            best_dim = -1
+            best_delta = 0.0
+            best_step = 0.0
+            for dim in range(n_features):
+                for step in (-self.learning_rate, self.learning_rate):
+                    w_arr[dim] = self.weights[dim] + step
+                    ndcg_sum = 0.0
+                    for xi_np, yi in zip(X_np, y):
+                        scores = xi_np @ w_arr
+                        ndcg_sum += _ndcg(scores)
+                    if ndcg_sum > best_delta:
+                        best_delta = ndcg_sum
+                        best_dim = dim
+                        best_step = step
+                    w_arr[dim] = self.weights[dim]
+            if best_dim < 0 or best_delta <= 0:
+                break
+            self.weights[best_dim] += best_step
+
+    def predict(self, X: list[list[float]]) -> list[float]:
+        """Score a list of document-feature vectors."""
+        if not self.weights:
+            return [0.0] * len(X)
+        w_arr = np.asarray(self.weights, dtype=np.float64)
+        X_arr = np.asarray(X, dtype=np.float64)
+        return X_arr.dot(w_arr).tolist()
+
+    def rank(
+        self, doc_features: list[tuple[int, list[float]]]
+    ) -> list[tuple[int, float]]:
+        """Return *(doc_id, score)* pairs sorted by descending score."""
+        ids, feats = zip(*doc_features) if doc_features else ([], [])
+        scores = self.predict(list(feats))
+        ranked = sorted(zip(ids, scores), key=lambda x: (-x[1], x[0]))
+        return list(ranked)
+
+
+# ---------------------------------------------------------------------------
+# Query Performance Prediction (QPP)
+# ---------------------------------------------------------------------------
+
+
+class QueryPerformancePredictor:
+    """Lightweight QPP heuristics for dynamic strategy selection."""
+
+    __slots__ = ("index", "scorer")
+
+    def __init__(self, index: InvertedIndex, scorer: BM25Scorer) -> None:
+        self.index = index
+        self.scorer = scorer
+
+    def _batch_doc_freq(self, tokens: set[str]) -> dict[str, int]:
+        """Batch document-frequency lookup without repeated state checks."""
+        result: dict[str, int] = {}
+        for token in tokens:
+            tid = self.index._term_to_id.get(token)
+            if tid is None:
+                continue
+            start = self.index._posting_docs_ptr[tid]
+            end = self.index._posting_docs_ptr[tid + 1]
+            result[token] = int(end - start)
+        return result
+
+    def avg_idf(self, query_tokens: list[str]) -> float:
+        """Average IDF of query tokens; lower = harder query."""
+        values = []
+        N = self.index.N
+        freqs = self._batch_doc_freq(set(query_tokens))
+        for token, df in freqs.items():
+            if df:
+                values.append(self.scorer._idf(df, N))
+        return sum(values) / len(values) if values else 0.0
+
+    def max_idf(self, query_tokens: list[str]) -> float:
+        values = []
+        N = self.index.N
+        freqs = self._batch_doc_freq(set(query_tokens))
+        for token, df in freqs.items():
+            if df:
+                values.append(self.scorer._idf(df, N))
+        return max(values) if values else 0.0
+
+    def query_scope(self, query_tokens: list[str]) -> float:
+        """Fraction of documents containing at least one query token."""
+        if self.index.N == 0:
+            return 0.0
+        all_docs = [
+            self.index.get_postings(t)[0]
+            for t in set(query_tokens)
+            if self.index.has_term(t)
+        ]
+        if not all_docs:
+            return 0.0
+        concat = np.concatenate(all_docs)
+        unique = np.unique(concat)
+        return len(unique) / self.index.N
+
+    def is_hard_query(self, query_tokens: list[str], avg_idf_threshold: float = 2.0) -> bool:
+        """Heuristic: query is "hard" if avg IDF is below threshold."""
+        return self.avg_idf(query_tokens) < avg_idf_threshold
+
+
+# ---------------------------------------------------------------------------
+# Hamming distance
+# ---------------------------------------------------------------------------
+
+
+def hamming_distance(s: str, t: str) -> int:
+    """Hamming distance between two equal-length strings."""
+    if len(s) != len(t):
+        raise ValueError("Hamming distance requires equal-length strings")
+    return sum(1 for a, b in zip(s, t) if a != b)
+
+
+# ---------------------------------------------------------------------------
+# Cosine similarity (TF-IDF vectors)
+# ---------------------------------------------------------------------------
+
+
+def cosine_similarity_tfidf(vec_a: dict[str, float], vec_b: dict[str, float]) -> float:
+    """Cosine similarity between two sparse TF-IDF vectors (dict: term -> weight)."""
+    if not vec_a or not vec_b:
+        return 0.0
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for term, w in vec_a.items():
+        norm_a += w * w
+        if term in vec_b:
+            dot += w * vec_b[term]
+    for w in vec_b.values():
+        norm_b += w * w
+    denom = (norm_a ** 0.5) * (norm_b ** 0.5)
+    return 0.0 if denom == 0 else dot / denom
+
+
+# ---------------------------------------------------------------------------
+# Soundex
+# ---------------------------------------------------------------------------
+
+
+def soundex(word: str) -> str:
+    """Classic Soundex phonetic encoding (4-char code)."""
+    word = word.upper()
+    if not word:
+        return ""
+    first = word[0]
+    # Map letters to digits
+    mapping = {
+        "B": "1", "F": "1", "P": "1", "V": "1",
+        "C": "2", "G": "2", "J": "2", "K": "2",
+        "Q": "2", "S": "2", "X": "2", "Z": "2",
+        "D": "3", "T": "3",
+        "L": "4",
+        "M": "5", "N": "5",
+        "R": "6",
+    }
+    digits = [first]
+    prev = mapping.get(first, "")
+    for ch in word[1:]:
+        d = mapping.get(ch, "")
+        if d:
+            if d != prev:
+                digits.append(d)
+            prev = d
+        else:
+            prev = ""
+    # Remove vowels/H/W after first letter (already handled by mapping)
+    result = "".join(digits)
+    result = result[0] + result[1:].replace("0", "")
+    result = result + "000"
+    return result[:4]
+
+
+# ---------------------------------------------------------------------------
+# Metaphone
+# ---------------------------------------------------------------------------
+
+
+def metaphone(word: str) -> str:
+    """Basic Metaphone phonetic encoding for English words."""
+    word = word.upper()
+    if not word:
+        return ""
+    # Simplified rules
+    result: list[str] = []
+    i = 0
+    n = len(word)
+    while i < n:
+        ch = word[i]
+        next_ch = word[i + 1] if i + 1 < n else ""
+        next2 = word[i + 2] if i + 2 < n else ""
+        prev = word[i - 1] if i > 0 else ""
+
+        if ch in "AEIOU":
+            if i == 0:
+                result.append(ch)
+            i += 1
+            continue
+        if ch == "B":
+            if not (i == n - 1 and prev == "M"):
+                result.append("B")
+            i += 1
+        elif ch == "C":
+            if next_ch == "H" and prev != "S":
+                result.append("X")
+                i += 2
+            elif next_ch == "I" and next2 == "A":
+                result.append("X")
+                i += 3
+            elif next_ch in "IEY":
+                result.append("S")
+                i += 2
+            else:
+                result.append("K")
+                i += 1
+        elif ch == "D":
+            if next_ch == "G" and next2 in "IEY":
+                result.append("J")
+                i += 3
+            else:
+                result.append("T")
+                i += 1
+        elif ch == "F":
+            result.append("F")
+            i += 1
+        elif ch == "G":
+            if next_ch == "H":
+                if i > 0 and word[i - 1] not in "AEIOU":
+                    result.append("K")
+                i += 2
+            elif next_ch == "N":
+                if i == n - 2:
+                    pass
+                else:
+                    result.append("N")
+                i += 2
+            elif next_ch == "E" and next2 == "L":
+                result.append("K")
+                i += 3
+            elif next_ch == "I" and next2 == "O":
+                result.append("J")
+                i += 3
+            elif next_ch in "IEY":
+                result.append("J")
+                i += 2
+            else:
+                result.append("K")
+                i += 1
+        elif ch == "H":
+            if prev in "AEIOU" or next_ch in "AEIOU":
+                result.append("H")
+            i += 1
+        elif ch == "J":
+            result.append("J")
+            i += 1
+        elif ch == "K":
+            if prev != "C":
+                result.append("K")
+            i += 1
+        elif ch == "L":
+            result.append("L")
+            i += 1
+        elif ch == "M":
+            result.append("M")
+            i += 1
+        elif ch == "N":
+            result.append("N")
+            i += 1
+        elif ch == "P":
+            if next_ch == "H":
+                result.append("F")
+                i += 2
+            else:
+                result.append("P")
+                i += 1
+        elif ch == "Q":
+            result.append("K")
+            i += 1
+        elif ch == "R":
+            result.append("R")
+            i += 1
+        elif ch == "S":
+            if next_ch == "H" or (next_ch == "I" and next2 in "OA"):
+                result.append("X")
+                i += 2 if next_ch == "H" else 3
+            else:
+                result.append("S")
+                i += 1
+        elif ch == "T":
+            if next_ch == "I" and next2 in "OA":
+                result.append("X")
+                i += 3
+            elif next_ch == "H":
+                result.append("0")
+                i += 2
+            elif next_ch == "C" and next2 == "H":
+                result.append("")
+                i += 1
+            else:
+                result.append("T")
+                i += 1
+        elif ch == "V":
+            result.append("F")
+            i += 1
+        elif ch == "W":
+            if next_ch in "AEIOU":
+                result.append("W")
+            i += 1
+        elif ch == "X":
+            result.append("KS")
+            i += 1
+        elif ch == "Y":
+            if next_ch in "AEIOU":
+                result.append("Y")
+            i += 1
+        elif ch == "Z":
+            result.append("S")
+            i += 1
+        else:
+            i += 1
+
+    # Remove duplicate adjacent letters
+    final = []
+    for c in result:
+        for sub in c:
+            if not final or sub != final[-1]:
+                final.append(sub)
+    return "".join(final)
+
+
+# ---------------------------------------------------------------------------
+# Porter Stemmer
+# ---------------------------------------------------------------------------
+
+
+def porter_stem(word: str) -> str:
+    """Simplified Porter Stemmer for English words."""
+    word = word.lower()
+    if len(word) <= 2:
+        return word
+
+    def _is_vowel(ch: str, prev: str = "") -> bool:
+        if ch in "aeiou":
+            return True
+        return ch == "y" and prev not in "aeiou"
+
+    def _measure(stem: str) -> int:
+        n = len(stem)
+        if n == 0:
+            return 0
+        # Replace y at start with vowel marker
+        seq = []
+        for i, ch in enumerate(stem):
+            prev = stem[i - 1] if i > 0 else ""
+            seq.append("V" if _is_vowel(ch, prev) else "C")
+        # Count VC transitions
+        m = 0
+        prev = seq[0]
+        for s in seq[1:]:
+            if prev == "C" and s == "V":
+                m += 1
+            prev = s
+        return m
+
+    def _ends_with(stem: str, suffix: str) -> bool:
+        return stem.endswith(suffix)
+
+    def _replace_suffix(stem: str, suffix: str, repl: str) -> str:
+        return stem[: -len(suffix)] + repl
+
+    # Step 1a
+    if _ends_with(word, "sses"):
+        word = _replace_suffix(word, "sses", "ss")
+    elif _ends_with(word, "ies"):
+        word = _replace_suffix(word, "ies", "i")
+    elif _ends_with(word, "ss"):
+        pass
+    elif _ends_with(word, "s"):
+        word = word[:-1]
+
+    # Step 1b
+    step1b_done = False
+    if _ends_with(word, "eed"):
+        stem = word[:-3]
+        if _measure(stem) > 0:
+            word = stem + "ee"
+    elif _ends_with(word, "ed"):
+        stem = word[:-2]
+        if any(_is_vowel(c, stem[i - 1] if i > 0 else "") for i, c in enumerate(stem)):
+            word = stem
+            step1b_done = True
+    elif _ends_with(word, "ing"):
+        stem = word[:-3]
+        if any(_is_vowel(c, stem[i - 1] if i > 0 else "") for i, c in enumerate(stem)):
+            word = stem
+            step1b_done = True
+
+    if step1b_done:
+        if _ends_with(word, "at"):
+            word = word + "e"
+        elif _ends_with(word, "bl"):
+            word = word + "e"
+        elif _ends_with(word, "iz"):
+            word = word + "e"
+        elif (
+            len(word) >= 2
+            and word[-1] not in "aeiou"
+            and word[-1] == word[-2]
+            and word[-1] not in "lsz"
+        ):
+            word = word[:-1]
+        elif _measure(word) == 1 and _ends_cvc(word):
+            word = word + "e"
+
+    # Step 1c
+    if word.endswith("y"):
+        stem = word[:-1]
+        if any(_is_vowel(c, stem[i - 1] if i > 0 else "") for i, c in enumerate(stem)):
+            word = stem + "i"
+
+    # Step 2
+    step2_map = {
+        "ational": "ate",
+        "tional": "tion",
+        "enci": "ence",
+        "anci": "ance",
+        "izer": "ize",
+        "abli": "able",
+        "alli": "al",
+        "entli": "ent",
+        "eli": "e",
+        "ousli": "ous",
+        "ization": "ize",
+        "ation": "ate",
+        "ator": "ate",
+        "alism": "al",
+        "iveness": "ive",
+        "fulness": "ful",
+        "ousness": "ous",
+        "aliti": "al",
+        "iviti": "ive",
+        "biliti": "ble",
+    }
+    for suffix, repl in step2_map.items():
+        if _ends_with(word, suffix):
+            stem = word[: -len(suffix)]
+            if _measure(stem) > 0:
+                word = stem + repl
+            break
+
+    # Step 3
+    step3_map = {
+        "icate": "ic",
+        "ative": "",
+        "alize": "al",
+        "iciti": "ic",
+        "ical": "ic",
+        "ful": "",
+        "ness": "",
+    }
+    for suffix, repl in step3_map.items():
+        if _ends_with(word, suffix):
+            stem = word[: -len(suffix)]
+            if _measure(stem) > 0:
+                word = stem + repl
+            break
+
+    # Step 4
+    step4_suffixes = [
+        "al", "ance", "ence", "er", "ic", "able", "ible", "ant",
+        "ement", "ment", "ent", "ion", "ou", "ism", "ate", "iti",
+        "ous", "ive", "ize",
+    ]
+    for suffix in step4_suffixes:
+        if _ends_with(word, suffix):
+            if suffix == "ion" and len(word) > 3 and word[-4] in "st":
+                stem = word[:-3]
+                if _measure(stem) > 1:
+                    word = stem
+                break
+            stem = word[: -len(suffix)]
+            if _measure(stem) > 1:
+                word = stem
+            break
+
+    # Step 5a
+    if _ends_with(word, "e"):
+        stem = word[:-1]
+        if _measure(stem) > 1:
+            word = stem
+        elif _measure(stem) == 1 and not _ends_cvc(stem):
+            word = stem
+
+    # Step 5b
+    if (
+        _measure(word) > 1
+        and len(word) >= 2
+        and word[-1] == word[-2]
+        and word[-1] == "l"
+    ):
+        word = word[:-1]
+
+    return word
+
+
+def _ends_cvc(word: str) -> bool:
+    """Check if word ends with consonant-vowel-consonant (with special cases)."""
+    if len(word) < 3:
+        return False
+    a, b, c = word[-3], word[-2], word[-1]
+    if c in "wxy":
+        return False
+    vowels = "aeiou"
+    return a not in vowels and b in vowels and c not in vowels
+
+
+# ---------------------------------------------------------------------------
+# MinHash – near-duplicate detection via shingling
+# ---------------------------------------------------------------------------
+
+
+class MinHash:
+    """MinHash signature for Jaccard similarity estimation."""
+
+    __slots__ = ("num_perm", "signature")
+
+    def __init__(self, text: str = "", num_perm: int = 128, k: int = 3) -> None:
+        self.num_perm = num_perm
+        self.signature = self._compute(text, k)
+
+    @staticmethod
+    def _shingles(text: str, k: int) -> set[str]:
+        """Generate k-character shingles."""
+        text = text.lower()
+        if len(text) < k:
+            return {text} if text else set()
+        return {text[i : i + k] for i in range(len(text) - k + 1)}
+
+    def _compute(self, text: str, k: int) -> list[int]:
+        shingles = self._shingles(text, k)
+        if not shingles:
+            return [0] * self.num_perm
+        shingles_list = list(shingles)
+        sig = [
+            min((hash((s, i)) & 0xFFFFFFFF for s in shingles_list), default=0xFFFFFFFF)
+            for i in range(self.num_perm)
+        ]
+        return sig
+
+    def jaccard(self, other: MinHash) -> float:
+        """Estimated Jaccard similarity between two MinHash signatures."""
+        if self.num_perm != other.num_perm:
+            raise ValueError("MinHash signatures must have same num_perm")
+        matches = sum(1 for a, b in zip(self.signature, other.signature) if a == b)
+        return matches / self.num_perm
+
+
+# ---------------------------------------------------------------------------
+# Query Performance Prediction extensions
+# ---------------------------------------------------------------------------
+
+
+def _query_lm(query_tokens: list[str]) -> dict[str, float]:
+    """Build a simple language model from query tokens."""
+    if not query_tokens:
+        return {}
+    total = len(query_tokens)
+    lm: dict[str, float] = {}
+    for t in query_tokens:
+        lm[t] = lm.get(t, 0.0) + 1.0 / total
+    return lm
+
+
+def _collection_lm(index: InvertedIndex) -> dict[str, float]:
+    """Estimate collection language model from index statistics."""
+    if index._collection_lm_cache is not None:
+        return index._collection_lm_cache.copy()
+    total_tokens = sum(index.doc_lengths)
+    if total_tokens == 0:
+        return {}
+    clm: dict[str, float] = {}
+    for term in index.terms():
+        postings = index.get_postings(term)
+        if postings is None:
+            continue
+        _, tfs = postings
+        freq = int(tfs.sum())
+        clm[term] = freq / total_tokens
+    return clm
+
+
+def clarity_score(index: InvertedIndex, query_tokens: list[str]) -> float:
+    """Query clarity: KL divergence between query LM and collection LM.
+
+    Higher clarity = query is more focused / easier.
+    """
+    if not query_tokens or index.N == 0:
+        return 0.0
+    q_lm = _query_lm(query_tokens)
+    c_lm = _collection_lm(index)
+    if not c_lm:
+        return 0.0
+    score = 0.0
+    for term, p in q_lm.items():
+        q = c_lm.get(term, 1e-12)
+        if q > 0 and p > 0:
+            score += p * math.log(p / q)
+    return score
+
+
+# ---------------------------------------------------------------------------
+# RankSVM – pairwise ranking with linear SVM
+# ---------------------------------------------------------------------------
+
+
+class RankSVM:
+    """Simplified RankSVM using pairwise transformations and SGD."""
+
+    __slots__ = ("learning_rate", "n_iterations", "weights", "margin")
+
+    def __init__(self, learning_rate: float = 0.01, n_iterations: int = 1000, margin: float = 1.0) -> None:
+        self.learning_rate = learning_rate
+        self.n_iterations = n_iterations
+        self.weights: list[float] = []
+        self.margin = margin
+
+    def fit(self, X: list[list[float]], y: list[float]) -> None:
+        """Fit on document-feature vectors with relevance grades."""
+        if not X:
+            return
+        n_features = len(X[0])
+        rng = np.random.default_rng(42)
+        self.weights = rng.normal(0.0, 0.01, n_features).tolist()
+        lr = self.learning_rate
+        X_arr = np.asarray(X, dtype=np.float64)
+        y_arr = np.asarray(y, dtype=np.float64)
+        # Build pairwise indices for docs with different grades
+        pair_i: list[int] = []
+        pair_j: list[int] = []
+        pair_label: list[int] = []
+        n = len(X)
+        for i in range(n):
+            for j in range(i + 1, n):
+                if y_arr[i] != y_arr[j]:
+                    pair_i.append(i)
+                    pair_j.append(j)
+                    pair_label.append(1 if y_arr[i] > y_arr[j] else -1)
+        if not pair_i:
+            return
+        pair_i_arr = np.asarray(pair_i, dtype=np.int64)
+        pair_j_arr = np.asarray(pair_j, dtype=np.int64)
+        pair_label_arr = np.asarray(pair_label, dtype=np.int64)
+        w_arr = np.asarray(self.weights, dtype=np.float64)
+        for _ in range(self.n_iterations):
+            order = rng.permutation(len(pair_i_arr))
+            for idx in order:
+                i = pair_i_arr[idx]
+                j = pair_j_arr[idx]
+                label = pair_label_arr[idx]
+                diff = X_arr[i] - X_arr[j]
+                margin = float(label) * np.dot(diff, w_arr)
+                if margin < self.margin:
+                    w_arr += lr * float(label) * diff
+        self.weights = w_arr.tolist()
+
+    def predict(self, X: list[list[float]]) -> list[float]:
+        if not self.weights:
+            return [0.0] * len(X)
+        w_arr = np.asarray(self.weights, dtype=np.float64)
+        X_arr = np.asarray(X, dtype=np.float64)
+        return X_arr.dot(w_arr).tolist()
+
+    def rank(self, doc_features: list[tuple[int, list[float]]]) -> list[tuple[int, float]]:
+        ids, feats = zip(*doc_features) if doc_features else ([], [])
+        scores = self.predict(list(feats))
+        return sorted(zip(ids, scores), key=lambda x: (-x[1], x[0]))
+
+
+# ---------------------------------------------------------------------------
+# Coordinate Ascent – listwise LTR
+# ---------------------------------------------------------------------------
+
+
+CoordinateAscent = LambdaMART
+
+
+
+
+class NoisyChannelSpeller:
+    """Simple noisy-channel spell corrector using edit distance + unigram frequency."""
+
+    __slots__ = ("dictionary", "max_edits", "_dict_keys")
+
+    def __init__(self, dictionary: dict[str, int], max_edits: int = 2) -> None:
+        self.dictionary = dictionary
+        self.max_edits = max_edits
+        self._dict_keys = set(dictionary)
+
+    def _edits1(self, word: str) -> set[str]:
+        letters = "abcdefghijklmnopqrstuvwxyz"
+        edits: set[str] = set()
+        for i in range(len(word) + 1):
+            a, b = word[:i], word[i:]
+            if b:
+                edits.add(a + b[1:])
+                if len(b) > 1:
+                    edits.add(a + b[1] + b[0] + b[2:])
+                for c in letters:
+                    edits.add(a + c + b[1:])
+            for c in letters:
+                edits.add(a + c + b)
+        return edits
+
+    def _candidates(self, word: str) -> set[str]:
+        candidates = {word} | self._edits1(word)
+        if self.max_edits >= 2:
+            candidates |= {e2 for w in candidates for e2 in self._edits1(w)}
+        return candidates & self._dict_keys or candidates
+
+    def correct(self, word: str) -> str:
+        """Return the most likely correction for *word*."""
+        word = word.lower()
+        if word in self.dictionary:
+            return word
+        candidates = self._candidates(word) & self._dict_keys
+        if not candidates:
+            return word
+        return max(candidates, key=lambda w: self.dictionary[w])
+
+
+# ---------------------------------------------------------------------------
+# Query Performance Prediction extensions
+# ---------------------------------------------------------------------------
+
+
+def scq(index: InvertedIndex, query_tokens: list[str]) -> float:
+    """Collection Query Similarity (SCQ) – average of IDF * TF over query terms."""
+    if not query_tokens or index.N == 0:
+        return 0.0
+    total = 0.0
+    count = 0
+    for token in set(query_tokens):
+        postings = index.get_postings(token)
+        if postings is None:
+            continue
+        docs, tfs = postings
+        df = len(docs)
+        cf = int(tfs.sum())
+        idf = BM25Scorer._idf(df, index.N)
+        total += idf * math.log(1 + cf)
+        count += 1
+    return total / count if count else 0.0
+
+
+# ---------------------------------------------------------------------------
+# Rocchio Relevance Feedback
+# ---------------------------------------------------------------------------
+
+
+class RocchioExpander:
+    """Rocchio pseudo-relevance feedback query expansion."""
+
+    __slots__ = ("index", "scorer", "alpha", "beta", "gamma", "fb_docs", "fb_terms")
+
+    def __init__(
+        self,
+        index: InvertedIndex,
+        scorer: BM25Scorer,
+        alpha: float = 1.0,
+        beta: float = 0.75,
+        gamma: float = 0.15,
+        fb_docs: int = 3,
+        fb_terms: int = 10,
+    ) -> None:
+        self.index = index
+        self.scorer = scorer
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
+        self.fb_docs = fb_docs
+        self.fb_terms = fb_terms
+
+    def expand(self, query_tokens: list[str], non_rel_docs: set[int] | None = None) -> list[str]:
+        """Return expanded query tokens using Rocchio formula."""
+        if not query_tokens:
+            return []
+        results = self.scorer.score_topk(query_tokens, top_k=self.fb_docs)
+        if not results:
+            return query_tokens
+        rel_docs = {doc_id for doc_id, _ in results}
+        non_rel = non_rel_docs or set()
+        # Build centroid vectors via forward index
+        term_scores: dict[str, float] = {}
+        for doc_id in rel_docs:
+            if doc_id < len(self.index._doc_term_freqs):
+                for term, tf in self.index._doc_term_freqs[doc_id].items():
+                    term_scores[term] = term_scores.get(term, 0.0) + self.beta * tf / max(len(rel_docs), 1)
+        for doc_id in non_rel:
+            if doc_id < len(self.index._doc_term_freqs):
+                for term, tf in self.index._doc_term_freqs[doc_id].items():
+                    term_scores[term] = term_scores.get(term, 0.0) - self.gamma * tf / max(len(non_rel), 1)
+        # Original query component
+        expanded: dict[str, float] = {}
+        for token in query_tokens:
+            expanded[token] = expanded.get(token, 0.0) + self.alpha
+        # Add top feedback terms
+        top_terms = heapq.nlargest(self.fb_terms, term_scores.items(), key=lambda x: x[1])
+        for term, score in top_terms:
+            if score > 0:
+                expanded[term] = expanded.get(term, 0.0) + score
+        # Flatten by weight
+        result: list[str] = []
+        for term, weight in expanded.items():
+            count = max(1, int(weight * 10))
+            result.extend([term] * count)
+        return result
+
+
+# ---------------------------------------------------------------------------
+# RankBoost – pairwise AdaBoost for ranking
+# ---------------------------------------------------------------------------
+
+
+class RankBoost:
+    """Simplified RankBoost using pairwise preferences."""
+
+    __slots__ = ("n_iterations", "weights", "weak_learners")
+
+    def __init__(self, n_iterations: int = 100) -> None:
+        self.n_iterations = n_iterations
+        self.weights: list[float] = []
+        self.weak_learners: list[tuple[int, float, float]] = []
+
+    def fit(self, X: list[list[float]], y: list[float]) -> None:
+        if not X or not X[0]:
+            return
+        n = len(X)
+        n_features = len(X[0])
+        X_arr = np.asarray(X, dtype=np.float64)
+        y_arr = np.asarray(y, dtype=np.float64)
+        # Pairwise distribution
+        pairs_i: list[int] = []
+        pairs_j: list[int] = []
+        for i in range(n):
+            for j in range(i + 1, n):
+                if y_arr[i] != y_arr[j]:
+                    if y_arr[i] > y_arr[j]:
+                        pairs_i.append(i)
+                        pairs_j.append(j)
+                    else:
+                        pairs_i.append(j)
+                        pairs_j.append(i)
+        if not pairs_i:
+            return
+        pair_i = np.asarray(pairs_i, dtype=np.int64)
+        pair_j = np.asarray(pairs_j, dtype=np.int64)
+        m = len(pair_i)
+        D_arr = np.full(m, 1.0 / m, dtype=np.float64)
+        for _ in range(self.n_iterations):
+            best_dim = -1
+            best_err = float("inf")
+            best_threshold = 0.0
+            best_direction = 1.0
+            # Sample candidate thresholds
+            for dim in range(n_features):
+                vals = np.unique(X_arr[:, dim])
+                if len(vals) <= 1:
+                    thresholds = [0.0]
+                else:
+                    thresholds = (vals[:-1] + vals[1:]) / 2.0
+                for thresh in thresholds.tolist():
+                    for direction in (1.0, -1.0):
+                        if direction == 1.0:
+                            wrong = (X_arr[pair_i, dim] < thresh) | (X_arr[pair_j, dim] >= thresh)
+                        else:
+                            wrong = (X_arr[pair_i, dim] > thresh) | (X_arr[pair_j, dim] <= thresh)
+                        err = float(D_arr.dot(wrong))
+                        if err < best_err:
+                            best_err = err
+                            best_dim = dim
+                            best_threshold = thresh
+                            best_direction = direction
+            if best_err >= 0.5 or best_err == 0:
+                break
+            alpha_t = 0.5 * math.log((1.0 - best_err) / max(best_err, 1e-12))
+            # Update distribution
+            if best_direction == 1.0:
+                correct_mask = (X_arr[pair_i, best_dim] >= best_threshold) & (X_arr[pair_j, best_dim] < best_threshold)
+            else:
+                correct_mask = (X_arr[pair_i, best_dim] <= best_threshold) & (X_arr[pair_j, best_dim] > best_threshold)
+            correct = np.where(correct_mask, 1.0, -1.0)
+            w = D_arr * np.exp(-alpha_t * correct)
+            Z = float(w.sum())
+            if Z == 0:
+                break
+            D_arr = w / Z
+            self.weak_learners.append((best_dim, best_threshold, best_direction * alpha_t))
+
+    def predict(self, X: list[list[float]]) -> list[float]:
+        if not self.weak_learners:
+            return [0.0] * len(X)
+        X_arr = np.asarray(X, dtype=np.float64)
+        scores = np.zeros(len(X), dtype=np.float64)
+        for dim, thresh, alpha in self.weak_learners:
+            scores += alpha * np.where(X_arr[:, dim] >= thresh, 1.0, -1.0)
+        return scores.tolist()
+
+    def rank(self, doc_features: list[tuple[int, list[float]]]) -> list[tuple[int, float]]:
+        ids, feats = zip(*doc_features) if doc_features else ([], [])
+        scores = self.predict(list(feats))
+        return sorted(zip(ids, scores), key=lambda x: (-x[1], x[0]))
+
+
+# ---------------------------------------------------------------------------
+# xQuAD – explicit query aspect diversification
+# ---------------------------------------------------------------------------
+
+
+def xquad_rerank(
+    results: list[tuple[int, float]],
+    aspects: dict[int, set[str]],
+    lambda_param: float = 0.5,
+    top_k: int | None = None,
+) -> list[tuple[int, float]]:
+    """Greedy xQuAD re-ranking.
+
+    *aspects* maps doc_id -> set of aspect labels.
+    """
+    if not results:
+        return []
+    if top_k is None:
+        top_k = len(results)
+
+    covered: set[str] = set()
+    selected: list[tuple[int, float]] = []
+    remaining = list(results)
+
+    while remaining and len(selected) < top_k:
+        best_idx = -1
+        best_doc: tuple[int, float] | None = None
+        best_score = -float("inf")
+        for idx, (doc_id, relevance) in enumerate(remaining):
+            doc_aspects = aspects.get(doc_id, set())
+            new_aspects = doc_aspects - covered
+            diversity = len(new_aspects) / max(len(doc_aspects), 1) if doc_aspects else 0.0
+            score = (1.0 - lambda_param) * relevance + lambda_param * diversity
+            if score > best_score:
+                best_score = score
+                best_doc = (doc_id, relevance)
+                best_idx = idx
+        if best_doc is None:
+            break
+        selected.append(best_doc)
+        covered |= aspects.get(best_doc[0], set())
+        remaining.pop(best_idx)
+    return selected
+
+
+# ---------------------------------------------------------------------------
+# I-Match – lexical fingerprint near-duplicate detection
+# ---------------------------------------------------------------------------
+
+
+def i_match_fingerprint(tokens: list[str], stopwords: set[str] | None = None) -> str:
+    """Return an I-Match fingerprint (sorted unique non-stop tokens joined)."""
+    stop = stopwords or set()
+    unique = sorted({t for t in tokens if t not in stop})
+    return " ".join(unique)

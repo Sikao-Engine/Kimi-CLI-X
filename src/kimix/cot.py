@@ -69,19 +69,21 @@ def _parse_response(text: str) -> CoTResult:
 
 def _ensure_cot_session() -> Session:
     default = get_default_session()
-    if default is not None and _globals._default_role != SystemPromptType.Thinker:
-        session = create_session(agent_type=SystemPromptType.Thinker)
-        _globals._default_session = session
-        _globals._default_role = SystemPromptType.Thinker
+    if default is not None and _globals._default_role == SystemPromptType.Thinker:
+        return default
+    session = create_session(agent_type=SystemPromptType.Thinker)
+    _globals._default_session = session
+    _globals._default_role = SystemPromptType.Thinker
     return session
 
 
 async def _ensure_cot_session_async() -> Session:
     default = get_default_session()
-    if default is not None and _globals._default_role != SystemPromptType.Thinker:
-        session = await _create_session_async(agent_type=SystemPromptType.Thinker)
-        _globals._default_session = session
-        _globals._default_role = SystemPromptType.Thinker
+    if default is not None and _globals._default_role == SystemPromptType.Thinker:
+        return default
+    session = await _create_session_async(agent_type=SystemPromptType.Thinker)
+    _globals._default_session = session
+    _globals._default_role = SystemPromptType.Thinker
     return session
 
 

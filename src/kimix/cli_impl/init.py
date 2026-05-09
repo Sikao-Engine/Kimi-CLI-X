@@ -65,6 +65,9 @@ _VALID_THINKING_EFFORTS = ('off', 'low', 'medium', 'high', 'xhigh', 'max')
 
 
 def _load_default_config() -> dict[str, Any]:
+    if _DEFAULT_CONFIG_PATH.exists():
+        with open(_DEFAULT_CONFIG_PATH, "rb") as f:
+            return orjson.loads(f.read())
     return orjson.loads(default_config)
 
 
@@ -145,8 +148,7 @@ def init(initialize: bool = True) -> None:
             config["type"] = model_type
 
             api_key = _ask_api_key()
-            if api_key:
-                config["api_key"] = api_key
+            config["api_key"] = api_key
 
             context_size = _ask_context_size()
             config["max_context_size"] = context_size

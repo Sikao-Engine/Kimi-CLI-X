@@ -686,3 +686,5 @@ class TestToolsSQLite:
         reflect_result = await reflect(Reflect.params())
         assert isinstance(reflect_result, ToolOk)
         assert "Memory System Status Report" in reflect_result.output
+
+

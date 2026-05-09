@@ -13,6 +13,12 @@ import pytest
 from kimix.cli_impl import init as init_module
 
 
+@pytest.fixture(autouse=True)
+def clear_api_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    monkeypatch.delenv("KIMIX_API_KEY", raising=False)
+
+
 @pytest.fixture
 def default_config() -> dict[str, Any]:
     return {
