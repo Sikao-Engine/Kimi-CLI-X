@@ -35,10 +35,14 @@ def get_system_prompt(
         items: list[str] = []
         agent_md_doc = ''
         skill_doc = ''
+        use_agent_md = False
+        use_skills = False
         if agent_role != SystemPromptType.Thinker:
             items.append('NO write pseudocode. NO flowcharts. No reasoning. Direct. NO step-by-step. No thinking. No planning. No explanations. No filler. No restating. No reconsider. No self-correction. No backtracking.')
         def worker_logic():
-            nonlocal role_doc
+            nonlocal role_doc, use_agent_md, use_skills
+            use_agent_md = True
+            use_skills = True
             role_doc = 'You are a terse ' + ('sub-agent' if is_sub_agent else 'coder')
             items.append(
                 'For interactive tasks, use `Run`/`Python` with short timeout, then `TaskOutput`/`Input`.'
@@ -66,11 +70,15 @@ def get_system_prompt(
             case SystemPromptType.Worker:
                 worker_logic()
             case SystemPromptType.TodoMaker:
+                use_agent_md = True
+                use_skills = True
                 role_doc = 'You are a plan maker'
                 items.append('Only make plan, never implement.')
                 items.append('Record all steps using `Note` tool.')
                 items.append('No multiple steps at once.')
             case SystemPromptType.SwarmCoordinator:
+                use_agent_md = True
+                use_skills = True
                 role_doc = 'You are a swarm coordinator'
                 items.append('Build a dependency DAG via `AddNode` and `AddEdge`')
                 items.append('AddNode: sub-task with a clear, actionable prompt')
@@ -94,16 +102,17 @@ def get_system_prompt(
                 items.append('Search memories, analyze, provide insights, report findings concisely. Do not modify anything.')
                 items.append('Use `SkillSearch` tool to search and retrieve skills.')
             case SystemPromptType.SkillSearcher:
+                use_skills = True
                 role_doc = 'You are a skill searcher'
                 items.append('Only use `SkillSearch` tool.')
                 items.append('For complex or multi-step tasks, use `SetTodoList` to track progress.')
                 items.append('Search skills, analyze, provide insights, report results concisely. Do not modify anything.')
 
 
-        if agent_md.is_file():
+        if use_agent_md and agent_md.is_file():
             agent_md_content = agent_md.read_text(encoding='utf-8', errors='replace')
             agent_md_doc = f'AGENTS.md:\n```\n{agent_md_content}\n```\n'
-        if args.KIMI_SKILLS:
+        if use_skills and args.KIMI_SKILLS:
             skill_doc = f'Skills:\n{args.KIMI_SKILLS}\n'
         numbered_block = ''
         if items:
