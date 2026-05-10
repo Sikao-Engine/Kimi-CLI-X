@@ -6,7 +6,7 @@ from kaos.path import KaosPath
 import kimix.base as base
 from kimi_cli.soul.agent import BuiltinSystemPromptArgs
 
-# This system prompt is designed to stop the modern LLM from over thinking and hallucination
+# Concise system prompt to reduce LLM overthinking and hallucination
 _SYSTEM_PROMP = (
     '{AGENT_ROLE}:\n{NUMBERED}\n{AGENTS_MD}\n{SKILLS}\n{EXTRA}'
 )
@@ -38,18 +38,15 @@ def get_system_prompt(
         use_agent_md = False
         use_skills = False
         if agent_role != SystemPromptType.Thinker:
-            items.append('NO write pseudocode. NO flowcharts. No reasoning. Direct. NO step-by-step. No thinking. No planning. No explanations. No filler. No restating. No reconsider. No self-correction. No backtracking.')
+            items.append('No pseudocode, flowcharts, reasoning, planning, filler, restating, or self-correction. Act directly.')
         def worker_logic():
             nonlocal role_doc, use_agent_md, use_skills
             use_agent_md = True
             use_skills = True
             role_doc = 'You are a terse ' + ('sub-agent' if is_sub_agent else 'coder')
-            items.append(
-                'For interactive tasks, use `Run`/`Python` with short timeout, then `TaskOutput`/`Input`.'
-            )
-            items.append(
-                'For complex or multi-step tasks, use `SetTodoList` to track progress.'
-            )
+            items.append('Interactive: `Run` short timeout, then `TaskOutput`/`Input`.')
+            items.append('Python: `python -c <code>`.')
+            items.append('Multi-step: use `SetTodoList`. Finish all before ending.')
             # if not is_sub_agent:
             #     items.append(
             #         'Use `Agent` for: "parallelizable independent subtasks", '
@@ -57,56 +54,51 @@ def get_system_prompt(
             #         '"permission-graded operations like read-only analysis or sandboxed execution".'
             #     )
             if args.KIMI_OS != 'Windows':
-                items.append(f'Bash Shell: {args.KIMI_SHELL}. use `Run`.')
+                items.append(f'Shell: {args.KIMI_SHELL}. Use `Run`.')
             else:
                 items.append('No Shell, use `Run`.')
             if yolo:
-                items.append(
-                    'Yolo mode: act without asking. Stay in workdir. No system changes unless asked.'
-                )
-            items.append('Use `SkillSearch` tool to search and retrieve skills.')
-            items.append('Use `Remember`, `Recall`, `Reflect`, `Forget` whenever memory is needed: long tasks, heavy context, multi-turn work, or anything worth saving.')
+                items.append('Yolo: no asking. Stay in workdir.')
+            items.append('`SkillSearch` to find skills.')
+            items.append('Drop context aggressively. `Remember` important/long-running info.')
+            items.append('`Forget` stale or duplicate info.')
+            items.append('`Recall` before any work.')
         match agent_role:
             case SystemPromptType.Worker:
                 worker_logic()
             case SystemPromptType.TodoMaker:
                 use_agent_md = True
                 use_skills = True
-                role_doc = 'You are a plan maker'
-                items.append('Only make plan, never implement.')
-                items.append('Record all steps using `Note` tool.')
+                role_doc = 'You are a planner'
+                items.append('Plan only. Do not implement.')
+                items.append('Record steps with `Note`.')
                 items.append('No multiple steps at once.')
             case SystemPromptType.SwarmCoordinator:
                 use_agent_md = True
                 use_skills = True
                 role_doc = 'You are a swarm coordinator'
-                items.append('Build a dependency DAG via `AddNode` and `AddEdge`')
-                items.append('AddNode: sub-task with a clear, actionable prompt')
-                items.append('AddEdge: execution order (upstream -> downstream)')
-                items.append('Keep graph acyclic. Minimize edges to maximize parallelism.')
-                items.append('Report all nodes and edges when done.')
-                items.append('Use `SkillSearch` tool to search and retrieve skills.')
+                items.append('Build DAG with `AddNode` and `AddEdge`.')
+                items.append('AddNode: clear, actionable sub-task prompt')
+                items.append('AddEdge: upstream → downstream')
+                items.append('Keep acyclic. Minimize edges, maximize parallelism.')
+                items.append('Report nodes and edges.')
+                items.append('`SkillSearch` for skills.')
             case SystemPromptType.Thinker:
                 worker_logic()
-                items.append(
-                    "Think step by step. "
-                    "Put your reasoning in <thinking>...</thinking>. "
-                    "When finished, write <quit/>. "
-                    "Be concise. No text outside tags."
-                )
-                items.append('Self-verify: catch errors, omissions, bad assumptions before final answer.')
+                items.append('Think in <thinking>...</thinking>. End with <quit/>. Concise. No text outside tags.')
+                items.append('Self-verify: catch errors and bad assumptions.')
             case SystemPromptType.Recaller:
                 role_doc = 'You are a memory recaller'
-                items.append('use `Recall` and `Reflect` tools.')
-                items.append('For complex or multi-step tasks, use `SetTodoList` to track progress.')
-                items.append('Search memories, analyze, provide insights, report findings concisely. Do not modify anything.')
-                items.append('Use `SkillSearch` tool to search and retrieve skills.')
+                items.append('Use `Recall` and `Reflect`.')
+                items.append('Multi-step: use `SetTodoList`.')
+                items.append('Search, analyze, report concisely. Read-only.')
+                items.append('`SkillSearch` for skills.')
             case SystemPromptType.SkillSearcher:
                 use_skills = True
                 role_doc = 'You are a skill searcher'
-                items.append('Only use `SkillSearch` tool.')
-                items.append('For complex or multi-step tasks, use `SetTodoList` to track progress.')
-                items.append('Search skills, analyze, provide insights, report results concisely. Do not modify anything.')
+                items.append('Only use `SkillSearch`.')
+                items.append('Multi-step: use `SetTodoList`.')
+                items.append('Search, analyze, report concisely. Read-only.')
 
 
         if use_agent_md and agent_md.is_file():

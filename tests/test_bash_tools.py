@@ -16,54 +16,128 @@ import pytest
 
 from kimi_agent_sdk import ToolOk, ToolError
 from kimix.tools.file.bash import (
+    Alias,
     Awk,
+    Base64,
     Basename,
+    Bc,
     Bunzip2,
     Bzip2,
     Cal,
     Cat,
+    Chgrp,
+    Chmod,
+    Chown,
+    Cksum,
+    Cmp,
+    Comm,
     Cp,
+    Crontab,
+    Csplit,
+    Curl,
     Cut,
     Date,
+    Dc,
     Df,
     Diff,
     Dirname,
     Du,
+    Echo,
+    EnvsSubst,
     Env,
+    Expand,
+    Expr,
     Export,
+    Factor,
+    FalseCmd,
     File,
     Find,
+    Fold,
+    Fmt,
+    Free,
+    Fuser,
     Grep,
+    Groups,
     Gunzip,
     Gzip,
     Head,
+    Hexdump,
+    History,
+    Host,
+    Hostname,
     Hwclock,
+    Id,
+    Ip,
+    Ifconfig,
+    Install,
+    Iostat,
+    Kill,
+    Killall,
     Ln,
     Ls,
+    LsbRelease,
+    Lsof,
+    Man,
+    Md5sum,
     Mkdir,
+    Mkfifo,
     Mktemp,
     Mv,
     Netstat,
+    Nl,
+    Nslookup,
+    Od,
+    Ping,
+    Printf,
     Printenv,
     Ps,
     Pwd,
+    Readlink,
     Realpath,
+    Renice,
+    Rev,
     Rm,
     Rmdir,
+    Scriptreplay,
     Sed,
+    Seq,
+    Sha256sum,
+    Shuf,
+    Sleep,
+    Split,
+    Ss,
     Stat,
+    Strings,
+    SwVers,
+    Systeminfo,
     Tac,
     Tail,
     Tar,
+    Test,
+    Top,
     Touch,
     Tr,
+    Traceroute,
+    Trap,
     Tree,
+    TrueCmd,
+    Ulimit,
+    Umask,
+    Uname,
+    Unexpand,
     Uniq,
     Unxz,
     Unzip,
+    Uptime,
+    Vmstat,
     Wc,
+    Wget,
     Which,
+    Who,
+    Whoami,
+    Xxd,
     Xz,
+    Yes,
     Zip,
 )
 
@@ -1883,3 +1957,1589 @@ class TestMktemp:
         assert "saved to file" in result.output
         assert Path(out.read_text(encoding="utf-8")).exists()
         Path(out.read_text(encoding="utf-8")).unlink(missing_ok=True)
+
+# ---------------------------------------------------------------------------
+# Alias
+# ---------------------------------------------------------------------------
+class TestAlias:
+    async def test_list_empty(self) -> None:
+        result = await _run(Alias, [])
+        assert isinstance(result, ToolOk)
+
+    async def test_set_and_get(self) -> None:
+        result = await _run(Alias, ["ll=ls -l"])
+        assert isinstance(result, ToolOk)
+        result = await _run(Alias, ["ll"])
+        assert isinstance(result, ToolOk)
+        # Alias lookup returns empty output on success; stored in _ALIAS_STORE
+
+    async def test_get_missing(self) -> None:
+        result = await _run(Alias, ["nonexistent_alias"])
+        assert isinstance(result, ToolError)
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "alias.txt"
+        result = await _run(Alias, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+
+# ---------------------------------------------------------------------------
+# Base64
+# ---------------------------------------------------------------------------
+class TestBase64:
+    async def test_encode(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("hello", encoding="utf-8")
+        result = await _run(Base64, [str(f)])
+        assert isinstance(result, ToolOk)
+        import base64
+        assert base64.b64encode(b"hello").decode() in result.output
+
+    async def test_decode(self, tmp_path: Path) -> None:
+        import base64
+        f = tmp_path / "a.b64"
+        f.write_bytes(base64.b64encode(b"hello"))
+        result = await _run(Base64, ["-d", str(f)])
+        assert isinstance(result, ToolOk)
+        assert "hello" in result.output
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Base64, [str(tmp_path / "missing")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.message
+
+# ---------------------------------------------------------------------------
+# Bc
+# ---------------------------------------------------------------------------
+class TestBc:
+    async def test_basic_math(self, tmp_path: Path) -> None:
+        f = tmp_path / "calc.bc"
+        f.write_text("2+3\n", encoding="utf-8")
+        result = await _run(Bc, [str(f)])
+        assert isinstance(result, ToolOk)
+        assert "5" in result.output
+
+    async def test_sqrt(self, tmp_path: Path) -> None:
+        f = tmp_path / "calc.bc"
+        f.write_text("sqrt(16)\n", encoding="utf-8")
+        result = await _run(Bc, [str(f)])
+        assert isinstance(result, ToolOk)
+        assert "4.0" in result.output
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Bc, [str(tmp_path / "missing.bc")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.message
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Bc, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Chgrp
+# ---------------------------------------------------------------------------
+class TestChgrp:
+    async def test_change_group(self, tmp_path: Path) -> None:
+        if not hasattr(os, "getgid"):
+            pytest.skip("getgid not available on this platform")
+        f = tmp_path / "a.txt"
+        f.write_text("hello")
+        result = await _run(Chgrp, [str(os.getgid()), str(f)])
+        assert isinstance(result, (ToolOk, ToolError))
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Chgrp, ["99999", str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.message or "chown" in result.message
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Chgrp, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Chmod
+# ---------------------------------------------------------------------------
+class TestChmod:
+    async def test_change_mode(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("hello")
+        result = await _run(Chmod, ["755", str(f)])
+        assert isinstance(result, ToolOk)
+
+    async def test_invalid_mode(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("hello")
+        result = await _run(Chmod, ["abc", str(f)])
+        assert isinstance(result, ToolError)
+        assert "invalid mode" in result.message
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Chmod, ["755", str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Chmod, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Chown
+# ---------------------------------------------------------------------------
+class TestChown:
+    async def test_change_owner(self, tmp_path: Path) -> None:
+        if not hasattr(os, "getuid"):
+            pytest.skip("getuid not available on this platform")
+        f = tmp_path / "a.txt"
+        f.write_text("hello")
+        result = await _run(Chown, [str(os.getuid()), str(f)])
+        assert isinstance(result, (ToolOk, ToolError))
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Chown, ["99999", str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.message or "chown" in result.message
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Chown, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Cmp
+# ---------------------------------------------------------------------------
+class TestCmp:
+    async def test_identical_files(self, tmp_path: Path) -> None:
+        f1 = tmp_path / "a.txt"
+        f2 = tmp_path / "b.txt"
+        f1.write_text("hello")
+        f2.write_text("hello")
+        result = await _run(Cmp, [str(f1), str(f2)])
+        assert isinstance(result, ToolOk)
+
+    async def test_different_files(self, tmp_path: Path) -> None:
+        f1 = tmp_path / "a.txt"
+        f2 = tmp_path / "b.txt"
+        f1.write_text("hello")
+        f2.write_text("world")
+        result = await _run(Cmp, [str(f1), str(f2)])
+        assert isinstance(result, ToolOk)
+        assert "differ" in result.output
+
+    async def test_silent(self, tmp_path: Path) -> None:
+        f1 = tmp_path / "a.txt"
+        f2 = tmp_path / "b.txt"
+        f1.write_text("hello")
+        f2.write_text("world")
+        result = await _run(Cmp, ["-s", str(f1), str(f2)])
+        assert isinstance(result, ToolOk)
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Cmp, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Comm
+# ---------------------------------------------------------------------------
+class TestComm:
+    async def test_common_lines(self, tmp_path: Path) -> None:
+        f1 = tmp_path / "a.txt"
+        f2 = tmp_path / "b.txt"
+        f1.write_text("a\nb\nc\n", encoding="utf-8")
+        f2.write_text("b\nc\nd\n", encoding="utf-8")
+        result = await _run(Comm, [str(f1), str(f2)])
+        assert isinstance(result, ToolOk)
+        assert "b" in result.output
+        assert "c" in result.output
+
+    async def test_suppress_columns(self, tmp_path: Path) -> None:
+        f1 = tmp_path / "a.txt"
+        f2 = tmp_path / "b.txt"
+        f1.write_text("a\n", encoding="utf-8")
+        f2.write_text("a\n", encoding="utf-8")
+        result = await _run(Comm, ["-1", "-2", str(f1), str(f2)])
+        assert isinstance(result, ToolOk)
+        assert "\t\ta" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Comm, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Crontab
+# ---------------------------------------------------------------------------
+class TestCrontab:
+    async def test_list_empty(self) -> None:
+        result = await _run(Crontab, ["-l"])
+        assert isinstance(result, ToolOk)
+
+    async def test_edit_not_supported(self) -> None:
+        result = await _run(Crontab, ["-e"])
+        assert isinstance(result, ToolError)
+        assert "not supported" in result.message
+
+    async def test_delete(self) -> None:
+        result = await _run(Crontab, ["-r"])
+        assert isinstance(result, ToolOk)
+
+    async def test_install(self, tmp_path: Path) -> None:
+        f = tmp_path / "cron.txt"
+        f.write_text("* * * * * echo hello\n", encoding="utf-8")
+        result = await _run(Crontab, [str(f)])
+        assert isinstance(result, ToolOk)
+
+# ---------------------------------------------------------------------------
+# Csplit
+# ---------------------------------------------------------------------------
+class TestCsplit:
+    async def test_basic_split(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("hello\nworld\nfoo\n", encoding="utf-8")
+        result = await _run(Csplit, [str(f), "world"])
+        assert isinstance(result, ToolOk)
+        assert "split into" in result.output
+
+    async def test_prefix(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("a\nb\nc\n", encoding="utf-8")
+        result = await _run(Csplit, ["-f", "out", str(f), "b"])
+        assert isinstance(result, ToolOk)
+        assert "out" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Csplit, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Curl
+# ---------------------------------------------------------------------------
+class TestCurl:
+    async def test_missing_url(self) -> None:
+        result = await _run(Curl, [])
+        assert isinstance(result, ToolError)
+        assert "missing URL" in result.message
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "curl.txt"
+        result = await _run(Curl, ["https://httpbin.org/get", "-o", str(out)])
+        assert isinstance(result, (ToolOk, ToolError))
+
+# ---------------------------------------------------------------------------
+# Dc
+# ---------------------------------------------------------------------------
+class TestDc:
+    async def test_add(self, tmp_path: Path) -> None:
+        f = tmp_path / "calc.dc"
+        f.write_text("2 3 + p\n", encoding="utf-8")
+        result = await _run(Dc, [str(f)])
+        assert isinstance(result, ToolOk)
+        assert "5" in result.output
+
+    async def test_multiply(self, tmp_path: Path) -> None:
+        f = tmp_path / "calc.dc"
+        f.write_text("4 5 * p\n", encoding="utf-8")
+        result = await _run(Dc, [str(f)])
+        assert isinstance(result, ToolOk)
+        assert "20" in result.output
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Dc, [str(tmp_path / "missing.dc")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.message
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Dc, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Echo
+# ---------------------------------------------------------------------------
+class TestEcho:
+    async def test_basic(self) -> None:
+        result = await _run(Echo, ["hello", "world"])
+        assert isinstance(result, ToolOk)
+        assert result.output == "hello world\n"
+
+    async def test_no_newline(self) -> None:
+        result = await _run(Echo, ["-n", "hello"])
+        assert isinstance(result, ToolOk)
+        assert result.output == "hello"
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "echo.txt"
+        result = await _run(Echo, ["hello"], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+        assert out.read_text(encoding="utf-8") == "hello\n"
+
+# ---------------------------------------------------------------------------
+# EnvsSubst
+# ---------------------------------------------------------------------------
+class TestEnvsSubst:
+    async def test_substitute(self, tmp_path: Path) -> None:
+        os.environ["TEST_ENVSUBST"] = "world"
+        try:
+            f = tmp_path / "a.txt"
+            f.write_text("hello $TEST_ENVSUBST", encoding="utf-8")
+            result = await _run(EnvsSubst, [str(f)])
+            assert isinstance(result, ToolOk)
+            assert "hello world" in result.output
+        finally:
+            os.environ.pop("TEST_ENVSUBST", None)
+
+    async def test_braces(self, tmp_path: Path) -> None:
+        os.environ["TEST_ENVSUBST2"] = "world"
+        try:
+            f = tmp_path / "a.txt"
+            f.write_text("hello ${TEST_ENVSUBST2}", encoding="utf-8")
+            result = await _run(EnvsSubst, [str(f)])
+            assert isinstance(result, ToolOk)
+            assert "hello world" in result.output
+        finally:
+            os.environ.pop("TEST_ENVSUBST2", None)
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(EnvsSubst, [str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.message
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(EnvsSubst, [])
+        assert isinstance(result, ToolError)
+        assert "missing" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Expand
+# ---------------------------------------------------------------------------
+class TestExpand:
+    async def test_basic(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("a\tb\n", encoding="utf-8")
+        result = await _run(Expand, [str(f)])
+        assert isinstance(result, ToolOk)
+        assert "a" in result.output
+        assert "b" in result.output
+
+    async def test_tabstop(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("a\tb\n", encoding="utf-8")
+        result = await _run(Expand, ["-t", "4", str(f)])
+        assert isinstance(result, ToolOk)
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Expand, [str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Expand, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Expr
+# ---------------------------------------------------------------------------
+class TestExpr:
+    async def test_addition(self) -> None:
+        result = await _run(Expr, ["2", "+", "3"])
+        assert isinstance(result, ToolOk)
+        assert result.output == "5"
+
+    async def test_string_equal(self) -> None:
+        result = await _run(Expr, ["abc", "=", "abc"])
+        assert isinstance(result, ToolOk)
+        assert result.output == "1"
+
+    async def test_string_not_equal(self) -> None:
+        result = await _run(Expr, ["abc", "=", "def"])
+        assert isinstance(result, ToolOk)
+        assert result.output == "0"
+
+    async def test_length(self) -> None:
+        result = await _run(Expr, ["length", "hello"])
+        assert isinstance(result, ToolOk)
+        assert result.output == "5"
+
+    async def test_regex_match(self) -> None:
+        result = await _run(Expr, ["hello", ":", "el+o"])
+        assert isinstance(result, ToolOk)
+        assert "ello" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Expr, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Factor
+# ---------------------------------------------------------------------------
+class TestFactor:
+    async def test_prime(self) -> None:
+        result = await _run(Factor, ["13"])
+        assert isinstance(result, ToolOk)
+        assert "13: 13" in result.output
+
+    async def test_composite(self) -> None:
+        result = await _run(Factor, ["12"])
+        assert isinstance(result, ToolOk)
+        assert "2" in result.output
+        assert "3" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Factor, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# FalseCmd
+# ---------------------------------------------------------------------------
+class TestFalseCmd:
+    async def test_returns_error(self) -> None:
+        result = await _run(FalseCmd, [])
+        assert isinstance(result, ToolError)
+
+# ---------------------------------------------------------------------------
+# Fmt
+# ---------------------------------------------------------------------------
+class TestFmt:
+    async def test_basic(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("hello world foo bar\n", encoding="utf-8")
+        result = await _run(Fmt, [str(f)])
+        assert isinstance(result, ToolOk)
+        assert "hello" in result.output
+
+    async def test_width(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("hello world\n", encoding="utf-8")
+        result = await _run(Fmt, ["-w", "5", str(f)])
+        assert isinstance(result, ToolOk)
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Fmt, [str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Fmt, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Fold
+# ---------------------------------------------------------------------------
+class TestFold:
+    async def test_basic(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("a" * 100 + "\n", encoding="utf-8")
+        result = await _run(Fold, [str(f)])
+        assert isinstance(result, ToolOk)
+        lines = result.output.strip().split("\n")
+        assert all(len(line) <= 80 for line in lines)
+
+    async def test_custom_width(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("a" * 20 + "\n", encoding="utf-8")
+        result = await _run(Fold, ["-w", "5", str(f)])
+        assert isinstance(result, ToolOk)
+        lines = result.output.strip().split("\n")
+        assert all(len(line) <= 5 for line in lines)
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Fold, [str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Fold, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Free
+# ---------------------------------------------------------------------------
+class TestFree:
+    async def test_default(self) -> None:
+        result = await _run(Free, [])
+        assert isinstance(result, ToolOk)
+        assert "Mem" in result.output
+
+    async def test_human(self) -> None:
+        result = await _run(Free, ["-h"])
+        assert isinstance(result, ToolOk)
+        assert "Mem" in result.output
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "free.txt"
+        result = await _run(Free, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Fuser
+# ---------------------------------------------------------------------------
+class TestFuser:
+    async def test_missing_operand(self) -> None:
+        result = await _run(Fuser, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+    async def test_windows_not_supported(self) -> None:
+        if platform.system() != "Windows":
+            pytest.skip("Windows-only test")
+        result = await _run(Fuser, ["/tmp"])
+        assert isinstance(result, ToolError)
+        assert "not supported" in result.message
+
+# ---------------------------------------------------------------------------
+# Groups
+# ---------------------------------------------------------------------------
+class TestGroups:
+    async def test_current_user(self) -> None:
+        if not hasattr(os, "getgid"):
+            pytest.skip("getgid not available on this platform")
+        result = await _run(Groups, [])
+        assert isinstance(result, ToolOk)
+
+    async def test_specific_user(self) -> None:
+        result = await _run(Groups, ["root"])
+        assert isinstance(result, (ToolOk, ToolError))
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        if not hasattr(os, "getgid"):
+            pytest.skip("getgid not available on this platform")
+        out = tmp_path / "groups.txt"
+        result = await _run(Groups, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Hexdump
+# ---------------------------------------------------------------------------
+class TestHexdump:
+    async def test_basic(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.bin"
+        f.write_bytes(b"\x00\x01\x02")
+        result = await _run(Hexdump, [str(f)])
+        assert isinstance(result, ToolOk)
+        assert "00000000" in result.output
+
+    async def test_canonical(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.bin"
+        f.write_bytes(b"hello")
+        result = await _run(Hexdump, ["-C", str(f)])
+        assert isinstance(result, ToolOk)
+        assert "hello" in result.output
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Hexdump, [str(tmp_path / "missing")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.message
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Hexdump, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# History
+# ---------------------------------------------------------------------------
+class TestHistory:
+    async def test_empty(self) -> None:
+        result = await _run(History, [])
+        assert isinstance(result, ToolOk)
+
+    async def test_add_and_list(self) -> None:
+        await _run(History, ["ls -l"])
+        result = await _run(History, [])
+        assert isinstance(result, ToolOk)
+        assert "ls -l" in result.output
+
+    async def test_clear(self) -> None:
+        await _run(History, ["ls"])
+        await _run(History, ["-c"])
+        result = await _run(History, [])
+        assert isinstance(result, ToolOk)
+        assert "ls" not in result.output
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "history.txt"
+        result = await _run(History, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Host
+# ---------------------------------------------------------------------------
+class TestHost:
+    async def test_localhost(self) -> None:
+        result = await _run(Host, ["localhost"])
+        assert isinstance(result, ToolOk)
+        assert "address" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Host, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "host.txt"
+        result = await _run(Host, ["localhost"], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Hostname
+# ---------------------------------------------------------------------------
+class TestHostname:
+    async def test_default(self) -> None:
+        result = await _run(Hostname, [])
+        assert isinstance(result, ToolOk)
+        assert len(result.output) > 0
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "hostname.txt"
+        result = await _run(Hostname, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Id
+# ---------------------------------------------------------------------------
+class TestId:
+    async def test_default(self) -> None:
+        if not hasattr(os, "getuid"):
+            pytest.skip("getuid not available on this platform")
+        result = await _run(Id, [])
+        assert isinstance(result, ToolOk)
+        assert "uid=" in result.output
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        if not hasattr(os, "getuid"):
+            pytest.skip("getuid not available on this platform")
+        out = tmp_path / "id.txt"
+        result = await _run(Id, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Ifconfig
+# ---------------------------------------------------------------------------
+class TestIfconfig:
+    async def test_default(self) -> None:
+        result = await _run(Ifconfig, [])
+        assert isinstance(result, ToolOk)
+        assert len(result.output) > 0
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "ifconfig.txt"
+        result = await _run(Ifconfig, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Install
+# ---------------------------------------------------------------------------
+class TestInstall:
+    async def test_copy_file(self, tmp_path: Path) -> None:
+        src = tmp_path / "a.txt"
+        dst = tmp_path / "b.txt"
+        src.write_text("hello")
+        result = await _run(Install, [str(src), str(dst)])
+        assert isinstance(result, ToolOk)
+        assert dst.read_text() == "hello"
+
+    async def test_copy_to_directory(self, tmp_path: Path) -> None:
+        src = tmp_path / "a.txt"
+        d = tmp_path / "dest"
+        d.mkdir()
+        src.write_text("hello")
+        result = await _run(Install, [str(src), str(d)])
+        assert isinstance(result, ToolOk)
+        assert (d / "a.txt").read_text() == "hello"
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Install, [])
+        assert isinstance(result, ToolError)
+        assert "missing" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Iostat
+# ---------------------------------------------------------------------------
+class TestIostat:
+    async def test_default(self) -> None:
+        result = await _run(Iostat, [])
+        assert isinstance(result, ToolOk)
+        assert "avg-cpu" in result.output or "Device" in result.output
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "iostat.txt"
+        result = await _run(Iostat, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Kill
+# ---------------------------------------------------------------------------
+class TestKill:
+    async def test_invalid_pid(self) -> None:
+        result = await _run(Kill, ["999999"])
+        assert isinstance(result, (ToolOk, ToolError))
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Kill, [])
+        assert isinstance(result, ToolOk)
+
+# ---------------------------------------------------------------------------
+# Killall
+# ---------------------------------------------------------------------------
+class TestKillall:
+    async def test_missing_operand(self) -> None:
+        result = await _run(Killall, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+    async def test_nonexistent_process(self) -> None:
+        result = await _run(Killall, ["nonexistent_process_12345"])
+        assert isinstance(result, (ToolOk, ToolError))
+
+# ---------------------------------------------------------------------------
+# LsbRelease
+# ---------------------------------------------------------------------------
+class TestLsbRelease:
+    async def test_default(self) -> None:
+        result = await _run(LsbRelease, [])
+        assert isinstance(result, ToolOk)
+        assert "Distributor ID" in result.output
+
+    async def test_id_only(self) -> None:
+        result = await _run(LsbRelease, ["-i"])
+        assert isinstance(result, ToolOk)
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "lsb.txt"
+        result = await _run(LsbRelease, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Lsof
+# ---------------------------------------------------------------------------
+class TestLsof:
+    async def test_default(self) -> None:
+        result = await _run(Lsof, [])
+        assert isinstance(result, ToolOk)
+
+    async def test_pid(self) -> None:
+        result = await _run(Lsof, [str(os.getpid())])
+        assert isinstance(result, (ToolOk, ToolError))
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "lsof.txt"
+        result = await _run(Lsof, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Man
+# ---------------------------------------------------------------------------
+class TestMan:
+    async def test_list_all(self) -> None:
+        result = await _run(Man, [])
+        assert isinstance(result, ToolOk)
+        # Output may be exported if too large; check for bash commands reference
+        assert "AVAILABLE BASH COMMANDS" in result.output or "saved to file" in result.output or "exported to file" in result.output
+
+    async def test_specific_command(self) -> None:
+        result = await _run(Man, ["cat"])
+        assert isinstance(result, ToolOk)
+        assert "Cat" in result.output
+
+    async def test_unknown_command(self) -> None:
+        result = await _run(Man, ["nonexistent_xyz"])
+        assert isinstance(result, ToolOk)
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "man.txt"
+        result = await _run(Man, ["cat"], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Md5sum
+# ---------------------------------------------------------------------------
+class TestMd5sum:
+    async def test_single_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_bytes(b"hello")
+        result = await _run(Md5sum, [str(f)])
+        assert isinstance(result, ToolOk)
+        import hashlib
+        expected = hashlib.md5(b"hello").hexdigest()
+        assert expected in result.output
+
+    async def test_multiple_files(self, tmp_path: Path) -> None:
+        f1 = tmp_path / "a.txt"
+        f2 = tmp_path / "b.txt"
+        f1.write_bytes(b"a")
+        f2.write_bytes(b"b")
+        result = await _run(Md5sum, [str(f1), str(f2)])
+        assert isinstance(result, ToolOk)
+        assert "\n" in result.output.strip()
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Md5sum, [str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Md5sum, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Mkfifo
+# ---------------------------------------------------------------------------
+class TestMkfifo:
+    async def test_create_fifo(self, tmp_path: Path) -> None:
+        p = tmp_path / "myfifo"
+        result = await _run(Mkfifo, [str(p)])
+        if platform.system() == "Windows":
+            assert isinstance(result, ToolError)
+            assert "not supported" in result.output
+        else:
+            assert isinstance(result, ToolOk)
+            assert p.exists()
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Mkfifo, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Nl
+# ---------------------------------------------------------------------------
+class TestNl:
+    async def test_basic(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("a\nb\n", encoding="utf-8")
+        result = await _run(Nl, [str(f)])
+        assert isinstance(result, ToolOk)
+        assert "1" in result.output
+        assert "2" in result.output
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Nl, [str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Nl, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Nslookup
+# ---------------------------------------------------------------------------
+class TestNslookup:
+    async def test_localhost(self) -> None:
+        result = await _run(Nslookup, ["localhost"])
+        assert isinstance(result, ToolOk)
+        assert "Name:" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Nslookup, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "nslookup.txt"
+        result = await _run(Nslookup, ["localhost"], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Od
+# ---------------------------------------------------------------------------
+class TestOd:
+    async def test_octal(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.bin"
+        f.write_bytes(b"\x00\x01\x02")
+        result = await _run(Od, [str(f)])
+        assert isinstance(result, ToolOk)
+        assert "0000000" in result.output
+
+    async def test_hex(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.bin"
+        f.write_bytes(b"\x00\x01\x02")
+        result = await _run(Od, ["-x", str(f)])
+        assert isinstance(result, ToolOk)
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Od, [str(tmp_path / "missing")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.message
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Od, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Ping
+# ---------------------------------------------------------------------------
+class TestPing:
+    async def test_localhost(self) -> None:
+        result = await _run(Ping, ["-c", "1", "127.0.0.1"])
+        assert isinstance(result, ToolOk)
+        assert "127.0.0.1" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Ping, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "ping.txt"
+        result = await _run(Ping, ["-c", "1", "127.0.0.1"], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Printf
+# ---------------------------------------------------------------------------
+class TestPrintf:
+    async def test_string(self) -> None:
+        result = await _run(Printf, ["%s", "hello"])
+        assert isinstance(result, ToolOk)
+        assert "hello" in result.output
+
+    async def test_integer(self) -> None:
+        result = await _run(Printf, ["%d", "42"])
+        assert isinstance(result, ToolOk)
+        assert "42" in result.output
+
+    async def test_hex(self) -> None:
+        result = await _run(Printf, ["%x", "255"])
+        assert isinstance(result, ToolOk)
+        assert "ff" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Printf, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Readlink
+# ---------------------------------------------------------------------------
+class TestReadlink:
+    async def test_symlink(self, tmp_path: Path) -> None:
+        target = tmp_path / "target.txt"
+        target.write_text("t")
+        link = tmp_path / "link.txt"
+        link.symlink_to(target)
+        result = await _run(Readlink, [str(link)])
+        assert isinstance(result, ToolOk)
+        assert "target.txt" in result.output
+
+    async def test_canonicalize(self, tmp_path: Path) -> None:
+        target = tmp_path / "target.txt"
+        target.write_text("t")
+        link = tmp_path / "link.txt"
+        link.symlink_to(target)
+        result = await _run(Readlink, ["-f", str(link)])
+        assert isinstance(result, ToolOk)
+        assert "target.txt" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Readlink, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Renice
+# ---------------------------------------------------------------------------
+class TestRenice:
+    async def test_invalid_pid(self) -> None:
+        result = await _run(Renice, ["-n", "10", "999999"])
+        assert isinstance(result, ToolError)
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Renice, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Rev
+# ---------------------------------------------------------------------------
+class TestRev:
+    async def test_basic(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("hello\nworld\n", encoding="utf-8")
+        result = await _run(Rev, [str(f)])
+        assert isinstance(result, ToolOk)
+        assert "olleh" in result.output
+        assert "dlrow" in result.output
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Rev, [str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Rev, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Scriptreplay
+# ---------------------------------------------------------------------------
+class TestScriptreplay:
+    async def test_basic(self, tmp_path: Path) -> None:
+        timing = tmp_path / "timing.txt"
+        script = tmp_path / "script.txt"
+        timing.write_text("0.1 5\n", encoding="utf-8")
+        script.write_text("hello", encoding="utf-8")
+        result = await _run(Scriptreplay, [str(timing), str(script)])
+        assert isinstance(result, ToolOk)
+        assert "hello" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Scriptreplay, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Scriptreplay, ["timing.txt", "script.txt"])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.message
+
+# ---------------------------------------------------------------------------
+# Seq
+# ---------------------------------------------------------------------------
+class TestSeq:
+    async def test_one_arg(self) -> None:
+        result = await _run(Seq, ["5"])
+        assert isinstance(result, ToolOk)
+        lines = result.output.strip().split("\n")
+        assert lines == ["1", "2", "3", "4", "5"]
+
+    async def test_two_args(self) -> None:
+        result = await _run(Seq, ["2", "5"])
+        assert isinstance(result, ToolOk)
+        lines = result.output.strip().split("\n")
+        assert lines == ["2", "3", "4", "5"]
+
+    async def test_three_args(self) -> None:
+        result = await _run(Seq, ["1", "2", "7"])
+        assert isinstance(result, ToolOk)
+        lines = result.output.strip().split("\n")
+        assert lines == ["1", "3", "5", "7"]
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Seq, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Sha256sum
+# ---------------------------------------------------------------------------
+class TestSha256sum:
+    async def test_single_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_bytes(b"hello")
+        result = await _run(Sha256sum, [str(f)])
+        assert isinstance(result, ToolOk)
+        import hashlib
+        expected = hashlib.sha256(b"hello").hexdigest()
+        assert expected in result.output
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Sha256sum, [str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Sha256sum, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Shuf
+# ---------------------------------------------------------------------------
+class TestShuf:
+    async def test_basic(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("a\nb\nc\n", encoding="utf-8")
+        result = await _run(Shuf, [str(f)])
+        assert isinstance(result, ToolOk)
+        lines = result.output.strip().split("\n")
+        assert sorted(lines) == ["a", "b", "c"]
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Shuf, [str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Shuf, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Sleep
+# ---------------------------------------------------------------------------
+class TestSleep:
+    async def test_seconds(self) -> None:
+        import time
+        start = time.time()
+        result = await _run(Sleep, ["0.1"])
+        elapsed = time.time() - start
+        assert isinstance(result, ToolOk)
+        assert elapsed >= 0.08
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Sleep, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Split
+# ---------------------------------------------------------------------------
+class TestSplit:
+    async def test_basic(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("line1\nline2\n", encoding="utf-8")
+        result = await _run(Split, [str(f)], cwd=str(tmp_path))
+        assert isinstance(result, ToolOk)
+        assert "split into" in result.output
+        assert (tmp_path / "xaa").exists()
+
+    async def test_lines(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("a\nb\nc\nd\n", encoding="utf-8")
+        result = await _run(Split, ["-l", "2", str(f)], cwd=str(tmp_path))
+        assert isinstance(result, ToolOk)
+
+    async def test_prefix(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("a\n", encoding="utf-8")
+        result = await _run(Split, [str(f), "out"], cwd=str(tmp_path))
+        assert isinstance(result, ToolOk)
+        assert (tmp_path / "outaa").exists()
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Split, [])
+        assert isinstance(result, ToolError)
+        assert "missing" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Ss
+# ---------------------------------------------------------------------------
+class TestSs:
+    async def test_default(self) -> None:
+        result = await _run(Ss, [])
+        assert isinstance(result, ToolOk)
+        assert len(result.output) > 0
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "ss.txt"
+        result = await _run(Ss, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Strings
+# ---------------------------------------------------------------------------
+class TestStrings:
+    async def test_basic(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.bin"
+        f.write_bytes(b"hello\x00world\x00")
+        result = await _run(Strings, [str(f)])
+        assert isinstance(result, ToolOk)
+        assert "hello" in result.output
+        assert "world" in result.output
+
+    async def test_min_length(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.bin"
+        f.write_bytes(b"hi\x00hello\x00")
+        result = await _run(Strings, ["-n", "5", str(f)])
+        assert isinstance(result, ToolOk)
+        assert "hello" in result.output
+        assert "hi" not in result.output
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Strings, [str(tmp_path / "missing")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Strings, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# SwVers
+# ---------------------------------------------------------------------------
+class TestSwVers:
+    async def test_default(self) -> None:
+        result = await _run(SwVers, [])
+        assert isinstance(result, ToolOk)
+        assert "ProductName" in result.output
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "sw_vers.txt"
+        result = await _run(SwVers, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Systeminfo
+# ---------------------------------------------------------------------------
+class TestSysteminfo:
+    async def test_default(self) -> None:
+        result = await _run(Systeminfo, [])
+        assert isinstance(result, ToolOk)
+        assert "Host Name" in result.output
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "systeminfo.txt"
+        result = await _run(Systeminfo, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Test
+# ---------------------------------------------------------------------------
+class TestTest:
+    async def test_exists_true(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("hello")
+        result = await _run(Test, ["-e", str(f)])
+        assert isinstance(result, ToolOk)
+
+    async def test_exists_false(self, tmp_path: Path) -> None:
+        result = await _run(Test, ["-e", str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+
+    async def test_is_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("hello")
+        result = await _run(Test, ["-f", str(f)])
+        assert isinstance(result, ToolOk)
+
+    async def test_is_directory(self, tmp_path: Path) -> None:
+        d = tmp_path / "adir"
+        d.mkdir()
+        result = await _run(Test, ["-d", str(d)])
+        assert isinstance(result, ToolOk)
+
+    async def test_string_equal(self) -> None:
+        result = await _run(Test, ["abc", "=", "abc"])
+        assert isinstance(result, ToolOk)
+
+    async def test_string_not_equal(self) -> None:
+        result = await _run(Test, ["abc", "!=", "def"])
+        assert isinstance(result, ToolOk)
+
+    async def test_numeric_less(self) -> None:
+        result = await _run(Test, ["2", "-lt", "5"])
+        assert isinstance(result, ToolOk)
+
+    async def test_numeric_greater(self) -> None:
+        result = await _run(Test, ["5", "-gt", "2"])
+        assert isinstance(result, ToolOk)
+
+    async def test_empty_no_args(self) -> None:
+        result = await _run(Test, [])
+        assert isinstance(result, ToolOk)
+
+# ---------------------------------------------------------------------------
+# Top
+# ---------------------------------------------------------------------------
+class TestTop:
+    async def test_default(self) -> None:
+        result = await _run(Top, [])
+        assert isinstance(result, ToolOk)
+        assert "PID" in result.output or "COMMAND" in result.output
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "top.txt"
+        result = await _run(Top, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Traceroute
+# ---------------------------------------------------------------------------
+class TestTraceroute:
+    async def test_localhost(self) -> None:
+        result = await _run(Traceroute, ["127.0.0.1"])
+        assert isinstance(result, ToolOk)
+        assert "127.0.0.1" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Traceroute, [])
+        assert isinstance(result, ToolError)
+        assert "missing host" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Trap
+# ---------------------------------------------------------------------------
+class TestTrap:
+    async def test_list_empty(self) -> None:
+        result = await _run(Trap, [])
+        assert isinstance(result, ToolOk)
+
+    async def test_set_trap(self) -> None:
+        import signal
+        result = await _run(Trap, ["echo caught", "SIGINT"])
+        assert isinstance(result, ToolOk)
+
+    async def test_remove_trap(self) -> None:
+        import signal
+        result = await _run(Trap, ["-", "SIGINT"])
+        assert isinstance(result, ToolOk)
+
+    async def test_invalid_signal(self) -> None:
+        result = await _run(Trap, ["echo", "INVALIDSIG"])
+        assert isinstance(result, ToolError)
+        assert "invalid signal" in result.message
+
+    async def test_missing_signal(self) -> None:
+        result = await _run(Trap, ["echo"])
+        assert isinstance(result, ToolError)
+        assert "missing signal" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# TrueCmd
+# ---------------------------------------------------------------------------
+class TestTrueCmd:
+    async def test_returns_ok(self) -> None:
+        result = await _run(TrueCmd, [])
+        assert isinstance(result, ToolOk)
+
+# ---------------------------------------------------------------------------
+# Ulimit
+# ---------------------------------------------------------------------------
+class TestUlimit:
+    async def test_default(self) -> None:
+        result = await _run(Ulimit, [])
+        assert isinstance(result, (ToolOk, ToolError))
+
+    async def test_all(self) -> None:
+        result = await _run(Ulimit, ["-a"])
+        assert isinstance(result, (ToolOk, ToolError))
+
+    async def test_not_supported(self) -> None:
+        if platform.system() != "Windows":
+            pytest.skip("Windows-only test")
+        result = await _run(Ulimit, [])
+        assert isinstance(result, ToolError)
+        assert "not supported" in result.message
+
+# ---------------------------------------------------------------------------
+# Umask
+# ---------------------------------------------------------------------------
+class TestUmask:
+    async def test_get(self) -> None:
+        result = await _run(Umask, [])
+        assert isinstance(result, ToolOk)
+        assert result.output.isdigit() or len(result.output) == 4
+
+    async def test_set(self) -> None:
+        result = await _run(Umask, ["022"])
+        assert isinstance(result, ToolOk)
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "umask.txt"
+        result = await _run(Umask, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Uname
+# ---------------------------------------------------------------------------
+class TestUname:
+    async def test_default(self) -> None:
+        result = await _run(Uname, [])
+        assert isinstance(result, ToolOk)
+        assert len(result.output) > 0
+
+    async def test_kernel(self) -> None:
+        result = await _run(Uname, ["-s"])
+        assert isinstance(result, ToolOk)
+        assert len(result.output) > 0
+
+    async def test_all(self) -> None:
+        result = await _run(Uname, ["-a"])
+        assert isinstance(result, ToolOk)
+        assert len(result.output) > 0
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "uname.txt"
+        result = await _run(Uname, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Unexpand
+# ---------------------------------------------------------------------------
+class TestUnexpand:
+    async def test_basic(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("a        b\n", encoding="utf-8")
+        result = await _run(Unexpand, [str(f)])
+        assert isinstance(result, ToolOk)
+        assert "a" in result.output
+        assert "b" in result.output
+
+    async def test_tabstop(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.txt"
+        f.write_text("a    b\n", encoding="utf-8")
+        result = await _run(Unexpand, ["-t", "4", str(f)])
+        assert isinstance(result, ToolOk)
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Unexpand, [str(tmp_path / "missing.txt")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.output
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Unexpand, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Uptime
+# ---------------------------------------------------------------------------
+class TestUptime:
+    async def test_default(self) -> None:
+        result = await _run(Uptime, [])
+        assert isinstance(result, ToolOk)
+        assert "up" in result.output
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "uptime.txt"
+        result = await _run(Uptime, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Vmstat
+# ---------------------------------------------------------------------------
+class TestVmstat:
+    async def test_default(self) -> None:
+        result = await _run(Vmstat, [])
+        assert isinstance(result, ToolOk)
+        assert "memory" in result.output.lower() or "free" in result.output
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "vmstat.txt"
+        result = await _run(Vmstat, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Wget
+# ---------------------------------------------------------------------------
+class TestWget:
+    async def test_missing_url(self) -> None:
+        result = await _run(Wget, [])
+        assert isinstance(result, ToolError)
+        assert "missing URL" in result.message
+
+    async def test_output_file(self, tmp_path: Path) -> None:
+        out = tmp_path / "wget.html"
+        result = await _run(Wget, ["https://httpbin.org/get", "-O", str(out)])
+        assert isinstance(result, (ToolOk, ToolError))
+
+# ---------------------------------------------------------------------------
+# Who
+# ---------------------------------------------------------------------------
+class TestWho:
+    async def test_default(self) -> None:
+        result = await _run(Who, [])
+        assert isinstance(result, ToolOk)
+        assert len(result.output) > 0
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "who.txt"
+        result = await _run(Who, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Whoami
+# ---------------------------------------------------------------------------
+class TestWhoami:
+    async def test_default(self) -> None:
+        result = await _run(Whoami, [])
+        assert isinstance(result, ToolOk)
+        assert len(result.output) > 0
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "whoami.txt"
+        result = await _run(Whoami, [], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
+
+# ---------------------------------------------------------------------------
+# Xxd
+# ---------------------------------------------------------------------------
+class TestXxd:
+    async def test_basic(self, tmp_path: Path) -> None:
+        f = tmp_path / "a.bin"
+        f.write_bytes(b"hello")
+        result = await _run(Xxd, [str(f)])
+        assert isinstance(result, ToolOk)
+        assert "00000000" in result.output
+
+    async def test_reverse(self, tmp_path: Path) -> None:
+        f = tmp_path / "hex.txt"
+        f.write_text("68656c6c6f", encoding="utf-8")
+        result = await _run(Xxd, ["-r", str(f)])
+        assert isinstance(result, ToolOk)
+        assert "hello" in result.output
+
+    async def test_missing_file(self, tmp_path: Path) -> None:
+        result = await _run(Xxd, [str(tmp_path / "missing")])
+        assert isinstance(result, ToolError)
+        assert "No such file" in result.message
+
+    async def test_missing_operand(self) -> None:
+        result = await _run(Xxd, [])
+        assert isinstance(result, ToolError)
+        assert "missing operand" in result.message.lower()
+
+# ---------------------------------------------------------------------------
+# Yes
+# ---------------------------------------------------------------------------
+class TestYes:
+    async def test_default(self) -> None:
+        result = await _run(Yes, [])
+        assert isinstance(result, ToolOk)
+        lines = result.output.strip().split("\n")
+        assert all(line == "y" for line in lines)
+        assert len(lines) == 1000
+
+    async def test_custom_text(self) -> None:
+        result = await _run(Yes, ["hello", "world"])
+        assert isinstance(result, ToolOk)
+        # Output may be exported if very large
+        if "saved to file" in result.output or "exported to file" in result.output:
+            pass
+        else:
+            lines = result.output.strip().split("\n")
+            assert all(line == "hello world" for line in lines)
+
+    async def test_output_path(self, tmp_path: Path) -> None:
+        out = tmp_path / "yes.txt"
+        result = await _run(Yes, ["ok"], output_path=str(out))
+        assert isinstance(result, ToolOk)
+        assert "saved to file" in result.output
