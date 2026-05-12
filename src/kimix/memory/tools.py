@@ -135,8 +135,6 @@ class Recall(CallableTool2):
                     provider_dict = custom_data.get("provider_dict")
                     if provider_dict is None:
                         provider_dict = dict(base._default_provider) if base._default_provider is not None else {}
-                    origin_temp = provider_dict.get("temperature", 1.0)
-                    provider_dict["temperature"] = origin_temp * 0.3
                     provider_dict["thinking_effort"] = 'off'
                     chat_provider = custom_data.get("chat_provider")
                     session = await _create_session_async(

@@ -78,6 +78,7 @@ class SkillSearch(CallableTool2[IndexerParams]):
                     provider_dict = custom_data.get("provider_dict")
                     if provider_dict is None:
                         provider_dict = dict(base._default_provider) if base._default_provider is not None else {}
+                    provider_dict["thinking_effort"] = 'off'
                     chat_provider = custom_data.get("chat_provider")
                     session = await _create_session_async(
                         agent_file=base._default_agent_file_dir / "agent_skill_searcher.yaml",

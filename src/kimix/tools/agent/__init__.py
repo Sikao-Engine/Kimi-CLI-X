@@ -15,7 +15,7 @@ class SubAgentParams(BaseModel):
 
 class Agent(CallableTool2):
     name: str = "Agent"
-    description: str = "Launch a read-only, stateless sub-agent for a task."
+    description: str = "Launch a thinking-off, stateless sub-agent for a task."
     params: type[SubAgentParams] = SubAgentParams
 
     def __init__(self, session: Session):
@@ -43,8 +43,15 @@ class Agent(CallableTool2):
                     session = None
                     try:
                         import kimix.base as base
+                        custom_data = self._session.get_custom_data()
+                        chat_provider = custom_data.get("chat_provider")
+                        if provider_dict is None:
+                            provider_dict = dict(base._default_provider) if base._default_provider is not None else {}
+                        provider_dict["thinking_effort"] = 'off'
                         session = await _create_session_async(
-                            agent_file=base._default_agent_file_dir / 'agent_subagent.yaml', agent_type=SystemPromptType.TrivialSubAgent)
+                            agent_file=base._default_agent_file_dir / 'agent_subagent.yaml', agent_type=SystemPromptType.TrivialSubAgent,
+                            provider_dict=provider_dict,
+                            chat_provider=chat_provider)
                         import kimix.utils as utils
                         await utils.prompt_async(prompt_str=params.prompt, session=session, output_function=output_function, cancel_callable=cancel_callable)
                     except Exception as e:
