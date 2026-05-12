@@ -13,6 +13,8 @@ import orjson
 
 from kimix.memory.types import MemoryEntry, MemoryType
 
+_MEMORY_TYPE_MAP = {m.value: m for m in MemoryType}
+_EMPTY_DICT: dict[str, Any] = {}
 
 _COLS_WITH_EMBEDDING = (
     "id, content, memory_type, timestamp, importance, access_count, "
@@ -66,6 +68,8 @@ class SQLiteBackend:
         self._read_pool: list[sqlite3.Connection] = []
         self._pool_lock = threading.Lock()
         self._max_read_pool = 3
+        self._count_cache: dict[tuple[str | None, str | None, bool], int] = {}
+        self._list_cache: dict[tuple, list[tuple[str, MemoryEntry]]] = {}
 
     def _create_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
@@ -125,10 +129,10 @@ class SQLiteBackend:
             emb = None
             source_idx = 7
         meta_raw = row[source_idx + 1]
-        metadata = orjson.loads(meta_raw) if meta_raw is not None else {}
+        metadata = _EMPTY_DICT if meta_raw is None or meta_raw == b'{}' else orjson.loads(meta_raw)
         return MemoryEntry(
             content=row[1],
-            memory_type=MemoryType(row[2]),
+            memory_type=_MEMORY_TYPE_MAP[row[2]],
             timestamp=row[3],
             importance=row[4],
             access_count=row[5],
@@ -147,21 +151,28 @@ class SQLiteBackend:
             return False
         return True
 
+    _PLACEHOLDER_CACHE: dict[int, str] = {}
+
     @staticmethod
     def _fetch_tags_conn(conn: sqlite3.Connection, entry_ids: list[str]) -> dict[str, list[str]]:
         result: dict[str, list[str]] = {}
         if not entry_ids:
             return result
-        chunk_size = 900
+        chunk_size = 30000
+        cache = SQLiteBackend._PLACEHOLDER_CACHE
         for i in range(0, len(entry_ids), chunk_size):
             chunk = entry_ids[i : i + chunk_size]
-            placeholders = ",".join("?" * len(chunk))
+            n = len(chunk)
+            placeholders = cache.get(n)
+            if placeholders is None:
+                placeholders = ",".join("?" * n)
+                cache[n] = placeholders
             rows = conn.execute(
-                f"SELECT entry_id, tag FROM memory_tags WHERE entry_id IN ({placeholders})",
+                f"SELECT entry_id, GROUP_CONCAT(tag, '\x01') FROM memory_tags WHERE entry_id IN ({placeholders}) GROUP BY entry_id",
                 chunk,
             ).fetchall()
-            for eid, tag in rows:
-                result.setdefault(eid, []).append(tag)
+            for eid, tag_blob in rows:
+                result[eid] = tag_blob.split("\x01") if tag_blob else []
         return result
 
     def _insert_tags(self, entry_id: str, tags: list[str]) -> None:
@@ -178,6 +189,8 @@ class SQLiteBackend:
     def store(self, entry: MemoryEntry, entry_id: str, dim: int = 384) -> None:
         if not self._entry_id_valid(entry_id):
             raise ValueError("entry_id must be a non-empty string")
+        self._count_cache.clear()
+        self._list_cache.clear()
         meta_blob = orjson.dumps(entry.metadata).decode() if entry.metadata else None
         with self._write_conn:
             self._write_conn.execute(
@@ -209,6 +222,8 @@ class SQLiteBackend:
     def store_many(self, items: list[tuple[str, MemoryEntry]], dim: int = 384) -> None:
         if not items:
             return
+        self._count_cache.clear()
+        self._list_cache.clear()
         chunk_size = 500
         for i in range(0, len(items), chunk_size):
             chunk = items[i : i + chunk_size]
@@ -274,6 +289,8 @@ class SQLiteBackend:
     def delete(self, entry_id: str) -> bool:
         if not self._entry_id_valid(entry_id):
             return False
+        self._count_cache.clear()
+        self._list_cache.clear()
         with self._write_conn:
             cursor = self._write_conn.execute("DELETE FROM memories WHERE id = ?", (entry_id,))
         return cursor.rowcount > 0
@@ -308,15 +325,22 @@ class SQLiteBackend:
         dim: int = 384,
         include_embedding: bool = False,
     ) -> list[tuple[str, MemoryEntry]]:
+        cache_key = (agent_id, memory_type.value if memory_type else None, exclude_expired, dim, include_embedding)
+        cached = self._list_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
         conn = self._acquire_read()
         try:
             sql, params = self._build_list_query(agent_id, memory_type, exclude_expired, include_embedding)
             rows = conn.execute(sql, params).fetchall()
             if not rows:
+                self._list_cache[cache_key] = []
                 return []
             ids = [row["id"] for row in rows]
             tags_map = self._fetch_tags_conn(conn, ids)
-            return [(row["id"], self._row_to_entry(row, dim, include_embedding, tags_map.get(row["id"], []))) for row in rows]
+            result = [(row["id"], self._row_to_entry(row, dim, include_embedding, tags_map.get(row["id"], []))) for row in rows]
+            self._list_cache[cache_key] = result
+            return result
         finally:
             self._release_read(conn)
 
@@ -377,6 +401,7 @@ class SQLiteBackend:
                 "UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?",
                 (now, entry_id),
             )
+        self._list_cache.clear()
 
     def update_access_many(self, entry_ids: list[str], now: float | None = None) -> None:
         if not entry_ids:
@@ -390,6 +415,7 @@ class SQLiteBackend:
                     f"UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id IN ({placeholders})",
                     (now, *entry_ids),
                 )
+            self._list_cache.clear()
             return
 
         with self._write_conn:
@@ -405,6 +431,7 @@ class SQLiteBackend:
                 (now,),
             )
             self._write_conn.execute("DROP TABLE temp_update_ids")
+        self._list_cache.clear()
 
     def update_importance(self, entry_id: str, importance: float) -> None:
         if not self._entry_id_valid(entry_id):
@@ -414,6 +441,7 @@ class SQLiteBackend:
                 "UPDATE memories SET importance = ? WHERE id = ?",
                 (importance, entry_id),
             )
+        self._list_cache.clear()
 
     def count(
         self,
@@ -421,6 +449,10 @@ class SQLiteBackend:
         memory_type: MemoryType | None = None,
         exclude_expired: bool = True,
     ) -> int:
+        cache_key = (agent_id, memory_type.value if memory_type is not None else None, exclude_expired)
+        cached = self._count_cache.get(cache_key)
+        if cached is not None:
+            return cached
         conn = self._acquire_read()
         try:
             conditions: list[str] = []
@@ -436,7 +468,9 @@ class SQLiteBackend:
                 params.append(time.time())
             where = "WHERE " + " AND ".join(conditions) if conditions else ""
             row = conn.execute(f"SELECT COUNT(*) FROM memories {where}", params).fetchone()
-            return row[0] if row else 0
+            result = row[0] if row else 0
+            self._count_cache[cache_key] = result
+            return result
         finally:
             self._release_read(conn)
 
@@ -475,9 +509,9 @@ class SQLiteBackend:
             rows = conn.execute(sql, params).fetchall()
             if not rows:
                 return []
-            ids = [row["id"] for row in rows]
+            ids = [row[0] for row in rows]
             tags_map = self._fetch_tags_conn(conn, ids)
-            return [(row["id"], self._row_to_entry(row, dim, include_embedding, tags_map.get(row["id"], []))) for row in rows]
+            return [(row[0], self._row_to_entry(row, dim, include_embedding, tags_map.get(row[0], []))) for row in rows]
         finally:
             self._release_read(conn)
 
@@ -490,6 +524,7 @@ class SQLiteBackend:
             self._write_conn.execute("ANALYZE memories")
             self._write_conn.execute("ANALYZE memory_tags")
             self._write_conn.commit()
+            self._list_cache.clear()
         return deleted
 
     def optimize(self) -> None:

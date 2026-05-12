@@ -6,6 +6,7 @@ import functools
 import hashlib
 import heapq
 import math
+import operator
 import struct
 import unicodedata
 from collections import Counter, defaultdict
@@ -14,6 +15,9 @@ from typing import Iterable
 
 import numpy as np
 from numpy.typing import NDArray
+
+_EMPTY_DOCS: NDArray[np.int32] = np.array([], dtype=np.int32)
+_EMPTY_TFS: NDArray[np.float64] = np.array([], dtype=np.float64)
 
 
 class NgramTokenizer:
@@ -27,9 +31,13 @@ class NgramTokenizer:
     @staticmethod
     def normalize(text: str) -> str:
         """Lower-case and apply Unicode NFKC normalization."""
-        return unicodedata.normalize("NFKC", text.lower())
+        lowered = text.lower()
+        if lowered.isascii():
+            return lowered
+        return unicodedata.normalize("NFKC", lowered)
 
     @staticmethod
+    @functools.lru_cache(maxsize=65536)
     def _is_cjk(char: str) -> bool:
         cp = ord(char)
         return (
@@ -45,6 +53,9 @@ class NgramTokenizer:
         """Auto-detect n-gram size: bigram for CJK, trigram for mixed/code."""
         if not text:
             return self.n
+        # Fast path: ASCII text cannot contain CJK, so skip the scan
+        if text.isascii():
+            return 3 if self.n < 3 else self.n
         cjk_count = 0
         threshold = len(text) * 3 // 10
         is_cjk = self._is_cjk
@@ -55,15 +66,30 @@ class NgramTokenizer:
                     return 2
         return 3 if self.n < 3 else self.n
 
+    @staticmethod
+    @functools.lru_cache(maxsize=1024)
+    def _tokenize_impl(text: str, n: int) -> tuple[str, ...]:
+        if len(text) < n:
+            return (text,)
+        return tuple(text[i : i + n] for i in range(len(text) - n + 1))
+
     def tokenize(self, text: str, n: int | None = None) -> list[str]:
         """Generate overlapping character n-grams from *text*."""
         text = self.normalize(text).strip()
         if not text:
             return []
         use_n = n if n is not None else self._detect_n(text)
-        if len(text) < use_n:
-            return [text]
-        return [text[i : i + use_n] for i in range(len(text) - use_n + 1)]
+        return list(self._tokenize_impl(text, use_n))
+
+
+class _PostingList:
+    """Lightweight mutable pair of parallel doc-id and tf lists."""
+
+    __slots__ = ("doc_ids", "tfs")
+
+    def __init__(self) -> None:
+        self.doc_ids: list[int] = []
+        self.tfs: list[int] = []
 
 
 class InvertedIndex:
@@ -91,6 +117,9 @@ class InvertedIndex:
         "_posting_tfs_data",
         "_posting_tfs_ptr",
         "_term_collection_freqs",
+        "_postings_sorted",
+        "_last_doc_id",
+        "_term_id_dirty",
     )
 
     _MAGIC = b"KIMX"
@@ -98,7 +127,7 @@ class InvertedIndex:
 
     def __init__(self) -> None:
         self._term_to_id: dict[str, int] = {}
-        self._temp_postings: dict[str, list[tuple[int, int]]] = defaultdict(list)
+        self._temp_postings: dict[str, _PostingList] = {}
         self._doc_lengths: list[int] = []
         self._doc_lengths_arr: NDArray[np.int32] = np.array([], dtype=np.int32)
         self._sum_doc_lengths: int = 0
@@ -118,6 +147,9 @@ class InvertedIndex:
         self._posting_tfs_data: NDArray[np.uint16] = np.array([], dtype=np.uint16)
         self._posting_tfs_ptr: NDArray[np.int32] = np.array([0], dtype=np.int32)
         self._term_collection_freqs: list[int] = []
+        self._postings_sorted: bool = True
+        self._last_doc_id: int = -1
+        self._term_id_dirty: bool = True
 
     @property
     def N(self) -> int:
@@ -142,12 +174,33 @@ class InvertedIndex:
         counter = Counter(tokens)
         self._doc_lengths.append(len(tokens))
         self._sum_doc_lengths += len(tokens)
-        self._doc_term_freqs.append(dict(counter))
-        for token, freq in counter.items():
-            if token not in self._term_to_id:
-                self._term_to_id[token] = len(self._term_to_id)
-            self._temp_postings[token].append((doc_id, freq))
-        self._N = max(self._N, doc_id + 1)
+        self._doc_term_freqs.append(counter)
+        temp_postings = self._temp_postings
+        sequential = doc_id >= self._last_doc_id
+        if sequential:
+            for token, freq in counter.items():
+                try:
+                    pl = temp_postings[token]
+                except KeyError:
+                    pl = _PostingList()
+                    temp_postings[token] = pl
+                pl.doc_ids.append(doc_id)
+                pl.tfs.append(freq)
+        else:
+            for token, freq in counter.items():
+                try:
+                    pl = temp_postings[token]
+                except KeyError:
+                    pl = _PostingList()
+                    temp_postings[token] = pl
+                if pl.doc_ids and pl.doc_ids[-1] > doc_id:
+                    self._postings_sorted = False
+                pl.doc_ids.append(doc_id)
+                pl.tfs.append(freq)
+        if doc_id >= self._N:
+            self._N = doc_id + 1
+        self._last_doc_id = doc_id
+        self._term_id_dirty = True
 
     def _is_stop_ngram(self, token: str, df: int, threshold: float = 0.5) -> bool:
         """Drop n-grams appearing in >*threshold* fraction of docs or pure punctuation."""
@@ -155,13 +208,26 @@ class InvertedIndex:
             return True
         if df > self._N * threshold:
             return True
-        if all(unicodedata.category(c).startswith("P") for c in token):
-            return True
-        return False
+        if token.isalpha():
+            return False
+        for c in token:
+            if not unicodedata.category(c).startswith("P"):
+                return False
+        return True
 
     @staticmethod
-    def _generate_deletes(term: str, max_edits: int) -> set[str]:
+    @functools.lru_cache(maxsize=65536)
+    def _generate_deletes(term: str, max_edits: int) -> frozenset[str]:
         """Generate all unique strings obtainable by deleting up to max_edits chars."""
+        if max_edits == 0 or not term:
+            return frozenset({term})
+        n = len(term)
+        # Fast path for the overwhelmingly-common max_edits == 1 case
+        if max_edits == 1:
+            result = {term}
+            for i in range(n):
+                result.add(term[:i] + term[i + 1 :])
+            return frozenset(result)
         deletes: set[str] = {term}
         for _ in range(max_edits):
             new_deletes: set[str] = set()
@@ -169,10 +235,12 @@ class InvertedIndex:
                 for i in range(len(t)):
                     new_deletes.add(t[:i] + t[i + 1 :])
             deletes |= new_deletes
-        return deletes
+        return frozenset(deletes)
 
     def _build_symmetric_delete_index(self, sd_max_len: int = 8) -> None:
         """Build Symmetric Delete indices for max_edits 1 and 2."""
+        if self._symmetric_delete_index:
+            return
         if not self._term_to_id:
             self._symmetric_delete_index = {1: {}, 2: {}}
             return
@@ -197,37 +265,50 @@ class InvertedIndex:
             return
 
         kept_terms: dict[str, int] = {}
-        docs_list: list[NDArray[np.int32]] = []
-        tfs_list: list[NDArray[np.uint16]] = []
-        docs_ptr = [0]
-        tfs_ptr = [0]
-
-        for token, postings in self._temp_postings.items():
-            df = len(postings)
+        kept_doc_ids: list[list[int]] = []
+        kept_tfs: list[list[int]] = []
+        for token, pl in self._temp_postings.items():
+            df = len(pl.doc_ids)
             if self._is_stop_ngram(token, df, stop_threshold):
                 continue
             if prune_df is not None and df > prune_df:
                 continue
             tid = len(kept_terms)
             kept_terms[token] = tid
-            if len(postings) == 1:
-                doc_id, freq = postings[0]
-                docs_arr = np.array([doc_id], dtype=np.int32)
-                tfs_arr = np.array([freq], dtype=np.uint16)
+            if not self._postings_sorted and df > 1:
+                postings = list(zip(pl.doc_ids, pl.tfs))
+                postings.sort(key=operator.itemgetter(0))
+                pl.doc_ids[:], pl.tfs[:] = zip(*postings) if postings else ([], [])
+            kept_doc_ids.append(pl.doc_ids)
+            kept_tfs.append(pl.tfs)
+
+        # Pre-allocate flat arrays
+        total_postings = sum(len(p) for p in kept_doc_ids)
+        docs_data = np.empty(total_postings, dtype=np.int32)
+        tfs_data = np.empty(total_postings, dtype=np.uint16)
+        docs_ptr = np.empty(len(kept_doc_ids) + 1, dtype=np.int32)
+        tfs_ptr = np.empty(len(kept_tfs) + 1, dtype=np.int32)
+        docs_ptr[0] = 0
+        tfs_ptr[0] = 0
+
+        idx = 0
+        for i, (doc_ids, tfs) in enumerate(zip(kept_doc_ids, kept_tfs)):
+            n = len(doc_ids)
+            if n == 1:
+                docs_data[idx] = doc_ids[0]
+                tfs_data[idx] = tfs[0]
             else:
-                postings.sort(key=lambda p: p[0])
-                docs_arr = np.fromiter((p[0] for p in postings), dtype=np.int32, count=len(postings))
-                tfs_arr = np.fromiter((p[1] for p in postings), dtype=np.uint16, count=len(postings))
-            docs_list.append(docs_arr)
-            tfs_list.append(tfs_arr)
-            docs_ptr.append(docs_ptr[-1] + len(docs_arr))
-            tfs_ptr.append(tfs_ptr[-1] + len(tfs_arr))
+                docs_data[idx : idx + n] = doc_ids  # type: ignore[call-overload]
+                tfs_data[idx : idx + n] = tfs  # type: ignore[call-overload]
+            idx += n
+            docs_ptr[i + 1] = idx
+            tfs_ptr[i + 1] = idx
 
         self._term_to_id = kept_terms
-        self._posting_docs_data = np.concatenate(docs_list) if docs_list else np.array([], dtype=np.int32)
-        self._posting_tfs_data = np.concatenate(tfs_list) if tfs_list else np.array([], dtype=np.uint16)
-        self._posting_docs_ptr = np.array(docs_ptr, dtype=np.int32)
-        self._posting_tfs_ptr = np.array(tfs_ptr, dtype=np.int32)
+        self._posting_docs_data = docs_data
+        self._posting_tfs_data = tfs_data
+        self._posting_docs_ptr = docs_ptr
+        self._posting_tfs_ptr = tfs_ptr
 
         by_len: dict[int, list[str]] = defaultdict(list)
         by_len_prefix: dict[tuple[int, str], list[str]] = defaultdict(list)
@@ -241,15 +322,13 @@ class InvertedIndex:
             self._avgdl = self._sum_doc_lengths / len(self._doc_lengths)
             self._doc_lengths_arr = np.array(self._doc_lengths, dtype=np.int32)
 
-        # Build forward index (filter pruned terms)
-        self._doc_token_strs = [
-            {t for t in doc_freqs if t in kept_terms}
-            for doc_freqs in self._doc_term_freqs
-        ]
-        self._doc_term_freqs = [
-            {t: f for t, f in doc_freqs.items() if t in kept_terms}
-            for doc_freqs in self._doc_term_freqs
-        ]
+        # Filter forward index only if terms were actually pruned
+        if len(kept_terms) < len(self._temp_postings):
+            self._doc_term_freqs = [
+                {t: f for t, f in doc_freqs.items() if t in kept_terms}
+                for doc_freqs in self._doc_term_freqs
+            ]
+        # _doc_token_strs is built on demand in _doc_token_set
 
         # Pre-compute collection LM and term collection frequencies
         self._term_collection_freqs = [0] * len(kept_terms)
@@ -264,9 +343,14 @@ class InvertedIndex:
         else:
             self._collection_lm_cache = {}
 
-        self._build_symmetric_delete_index()
+        self._term_id_dirty = False
         self._temp_postings.clear()
         self._finalized = True
+
+    def _ensure_term_to_id(self) -> None:
+        if self._term_id_dirty:
+            self._term_to_id = {token: i for i, token in enumerate(self._temp_postings)}
+            self._term_id_dirty = False
 
     def get_postings(
         self, term: str
@@ -291,9 +375,13 @@ class InvertedIndex:
         return len(postings[0])
 
     def has_term(self, term: str) -> bool:
+        if not self._finalized:
+            return term in self._temp_postings
         return term in self._term_to_id
 
     def terms(self) -> Iterable[str]:
+        if not self._finalized:
+            return self._temp_postings.keys()
         return self._term_to_id.keys()
 
     def save(self, path: str | Path, include_forward_index: bool = False) -> None:
@@ -325,7 +413,7 @@ class InvertedIndex:
 
             # Doc lengths
             if num_docs:
-                f.write(np.array(self._doc_lengths, dtype=np.int32).tobytes())
+                f.write(memoryview(np.array(self._doc_lengths, dtype=np.int32)))
 
             # Posting lists (in term_id order)
             for i, term in enumerate(terms):
@@ -337,8 +425,8 @@ class InvertedIndex:
                 df = len(docs)
                 f.write(struct.pack("<I", df))
                 if df:
-                    f.write(docs.tobytes())
-                    f.write(tfs.tobytes())
+                    f.write(memoryview(docs))
+                    f.write(memoryview(tfs))
 
             # Optional forward-index chunk for fast load
             if include_forward_index:
@@ -381,30 +469,34 @@ class InvertedIndex:
             self._term_to_id = term_to_id
 
             if num_docs:
-                self._doc_lengths = np.frombuffer(f.read(num_docs * 4), dtype=np.int32).tolist()
+                dl_buf = np.empty(num_docs, dtype=np.int32)
+                f.readinto(dl_buf)
+                self._doc_lengths = dl_buf.tolist()
             else:
                 self._doc_lengths = []
             self._sum_doc_lengths = sum(self._doc_lengths)
             self._doc_lengths_arr = np.array(self._doc_lengths, dtype=np.int32)
 
-            docs_list: list[NDArray[np.int32]] = []
-            tfs_list: list[NDArray[np.uint16]] = []
+            docs_data_list: list[NDArray[np.int32]] = []
+            tfs_data_list: list[NDArray[np.uint16]] = []
             docs_ptr = [0]
             tfs_ptr = [0]
             for _ in range(num_terms):
                 df = struct.unpack("<I", f.read(4))[0]
                 if df:
-                    docs = np.frombuffer(f.read(df * 4), dtype=np.int32).copy()
-                    tfs = np.frombuffer(f.read(df * 2), dtype=np.uint16).copy()
+                    docs = np.empty(df, dtype=np.int32)
+                    tfs = np.empty(df, dtype=np.uint16)
+                    f.readinto(docs)
+                    f.readinto(tfs)
                 else:
                     docs = np.array([], dtype=np.int32)
                     tfs = np.array([], dtype=np.uint16)
-                docs_list.append(docs)
-                tfs_list.append(tfs)
+                docs_data_list.append(docs)
+                tfs_data_list.append(tfs)
                 docs_ptr.append(docs_ptr[-1] + df)
                 tfs_ptr.append(tfs_ptr[-1] + df)
-            self._posting_docs_data = np.concatenate(docs_list) if docs_list else np.array([], dtype=np.int32)
-            self._posting_tfs_data = np.concatenate(tfs_list) if tfs_list else np.array([], dtype=np.uint16)
+            self._posting_docs_data = np.concatenate(docs_data_list) if docs_data_list else np.array([], dtype=np.int32)
+            self._posting_tfs_data = np.concatenate(tfs_data_list) if tfs_data_list else np.array([], dtype=np.uint16)
             self._posting_docs_ptr = np.array(docs_ptr, dtype=np.int32)
             self._posting_tfs_ptr = np.array(tfs_ptr, dtype=np.int32)
 
@@ -480,7 +572,6 @@ class InvertedIndex:
                     if d_int < n_docs:
                         self._doc_token_strs[d_int].add(term)
                         self._doc_term_freqs[d_int][term] = tf_int
-        self._build_symmetric_delete_index()
         self._finalized = True
 
 
@@ -539,17 +630,17 @@ class BM25Scorer:
         """Return (doc_ids, score_deltas) for a single query token."""
         postings = self.index.get_postings(token)
         if postings is None:
-            return np.array([], dtype=np.int32), np.array([], dtype=np.float64)
+            return _EMPTY_DOCS, _EMPTY_TFS
         docs, tfs = postings
         if candidate_docs is not None:
             if len(candidate_docs) <= 256:
                 idx = np.searchsorted(candidate_docs, docs)
-                idx = np.clip(idx, 0, len(candidate_docs) - 1)
+                np.minimum(idx, len(candidate_docs) - 1, out=idx)
                 valid = candidate_docs[idx] == docs
             else:
                 valid = np.isin(docs, candidate_docs)
             if not np.any(valid):
-                return np.array([], dtype=np.int32), np.array([], dtype=np.float64)
+                return _EMPTY_DOCS, _EMPTY_TFS
             docs = docs[valid]
             tfs = tfs[valid]
         df = len(docs)
@@ -583,7 +674,7 @@ class BM25Scorer:
         for token, q_weight in token_counts.items():
             docs, scores = self._token_scores(token, q_weight, cand_sorted)
             if len(docs):
-                scores_arr[docs] += scores
+                np.add.at(scores_arr, docs, scores)
         return scores_arr
 
     def _accumulate_sparse(
@@ -602,8 +693,9 @@ class BM25Scorer:
         token_counts = Counter(query_tokens)
         for token, q_weight in token_counts.items():
             docs, tfs_f = self._token_scores(token, q_weight, cand_sorted)
+            scores_get = scores.get
             for d, score in zip(docs.tolist(), tfs_f.tolist()):
-                scores[d] = scores.get(d, 0.0) + score
+                scores[d] = scores_get(d, 0.0) + score
         return scores
 
     def score(
@@ -624,7 +716,7 @@ class BM25Scorer:
         if N > 50000:
             return self._accumulate_sparse(query_tokens, candidate_docs)
         scores_arr = self._accumulate(query_tokens, candidate_docs)
-        nonzero = np.flatnonzero(scores_arr)
+        nonzero = np.flatnonzero(scores_arr).tolist()
         return {int(i): float(scores_arr[i]) for i in nonzero}
 
     def score_topk(
@@ -647,7 +739,7 @@ class BM25Scorer:
         use_sparse = (
             (N > 50000 and top_k < N // 20)
             or (cand_size < 5000 and N > 100000)
-            or (top_k < N // 50)
+            or (N > 5000 and top_k < N // 50)
         )
 
         if use_sparse:
@@ -660,14 +752,14 @@ class BM25Scorer:
 
         scores_arr = self._accumulate(query_tokens, candidate_docs)
         if top_k >= N:
-            nonzero = np.flatnonzero(scores_arr)
+            nonzero = np.flatnonzero(scores_arr).tolist()
             return [(int(i), float(scores_arr[i])) for i in nonzero]
 
         partitioned = np.argpartition(scores_arr, -top_k)[-top_k:]
         mask = scores_arr[partitioned] > 0
         top_indices = partitioned[mask]
         top_scores = scores_arr[top_indices]
-        order = np.argsort(-top_scores)
+        order = np.argsort(-top_scores).tolist()
         return [(int(top_indices[i]), float(top_scores[i])) for i in order]
 
 
@@ -691,7 +783,7 @@ class LevenshteinAutomaton:
             pc[c] = pc.get(c, 0) + 1
         self._pattern_counts = pc
         self._pattern_counts_items = list(pc.items())
-        self._pattern_deletes: set[str] = InvertedIndex._generate_deletes(pattern, max_edits)
+        self._pattern_deletes: frozenset[str] = InvertedIndex._generate_deletes(pattern, max_edits)
 
     @staticmethod
     def auto_fuzziness(term: str) -> int:
@@ -753,16 +845,7 @@ class LevenshteinAutomaton:
         total = 0
         matched = 0
         term_len = len(term)
-        if term_len <= 32 and len(self._pattern_counts_items) <= 32:
-            tc: dict[str, int] = {}
-            for ch in term:
-                tc[ch] = tc.get(ch, 0) + 1
-            for c, pc in self._pattern_counts_items:
-                tc_c = tc.get(c, 0)
-                matched += tc_c
-                if pc != tc_c:
-                    total += abs(pc - tc_c)
-        elif term_len <= 32:
+        if term_len <= 32:
             for c, pc in self._pattern_counts_items:
                 tc_c = term.count(c)
                 matched += tc_c
@@ -790,6 +873,8 @@ class LevenshteinAutomaton:
 
         # Use Symmetric Delete index for prefix_length == 1 when available
         if prefix_length == 1 and max_edits > 0 and hasattr(dictionary, "_symmetric_delete_index"):
+            if not dictionary._symmetric_delete_index:  # type: ignore[attr-defined]
+                dictionary._build_symmetric_delete_index()  # type: ignore[attr-defined]
             sd_index = dictionary._symmetric_delete_index  # type: ignore[attr-defined]
             sd = sd_index.get(max_edits) or sd_index.get(1, {})
             if sd:
@@ -922,6 +1007,8 @@ class Searcher:
         self.max_expansions = max_expansions
         self.prefix_length = prefix_length
         self._expand_cache: dict[tuple[str, str | int, int, int], list[str]] = {}
+        if self.fuzziness != 0:
+            self.index._build_symmetric_delete_index()
 
     @staticmethod
     def _is_latin_token(token: str) -> bool:
@@ -1000,11 +1087,13 @@ class Searcher:
                         doc_token_counts[d_int] = doc_token_counts.get(d_int, 0) + 1
                 else:
                     seen_docs: set[int] = set()
+                    seen_docs_add = seen_docs.add
+                    doc_token_counts_get = doc_token_counts.get
                     for docs in all_docs:
                         for d_int in docs.tolist():
                             if d_int not in seen_docs:
-                                seen_docs.add(d_int)
-                                doc_token_counts[d_int] = doc_token_counts.get(d_int, 0) + 1
+                                seen_docs_add(d_int)
+                                doc_token_counts[d_int] = doc_token_counts_get(d_int, 0) + 1
             if doc_token_counts:
                 candidate_docs = {
                     doc_id for doc_id, count in doc_token_counts.items()
@@ -1032,6 +1121,7 @@ class Searcher:
 # ---------------------------------------------------------------------------
 
 
+@functools.lru_cache(maxsize=65536)
 def jaro_similarity(s: str, t: str) -> float:
     """Return Jaro similarity between *s* and *t* (0.0–1.0)."""
     if s == t:
@@ -1072,11 +1162,13 @@ def jaro_similarity(s: str, t: str) -> float:
     ) / 3.0
 
 
+@functools.lru_cache(maxsize=65536)
 def jaro_winkler_similarity(s: str, t: str, p: float = 0.1, max_prefix: int = 4) -> float:
     """Return Jaro–Winkler similarity, boosting prefix matches."""
     jaro = jaro_similarity(s, t)
     prefix = 0
-    for i in range(min(max_prefix, len(s), len(t))):
+    limit = min(max_prefix, len(s), len(t))
+    for i in range(limit):
         if s[i] == t[i]:
             prefix += 1
         else:
@@ -1084,6 +1176,7 @@ def jaro_winkler_similarity(s: str, t: str, p: float = 0.1, max_prefix: int = 4)
     return jaro + prefix * p * (1 - jaro)
 
 
+@functools.lru_cache(maxsize=65536)
 def sorensen_dice_coefficient(s: str, t: str) -> float:
     """Return Sørensen–Dice coefficient based on bigram overlap."""
     if not s and not t:
@@ -1097,6 +1190,7 @@ def sorensen_dice_coefficient(s: str, t: str) -> float:
     return 0.0 if denom == 0 else 2.0 * intersection / denom
 
 
+@functools.lru_cache(maxsize=65536)
 def ngram_overlap(s: str, t: str, n: int = 2) -> float:
     """Return n-gram overlap ratio (intersection / union)."""
     if not s or not t:
@@ -1211,6 +1305,8 @@ def _doc_token_set(index: InvertedIndex, doc_id: int) -> set[str]:
     """Recover the token set for *doc_id* from the forward index."""
     if doc_id < len(index._doc_token_strs):
         return index._doc_token_strs[doc_id].copy()
+    if doc_id < len(index._doc_term_freqs):
+        return set(index._doc_term_freqs[doc_id])
     return set()
 
 
@@ -1336,15 +1432,21 @@ class RM3Expander:
 # ---------------------------------------------------------------------------
 
 
+_LOG2_INV = [1.0 / math.log2(i) for i in range(2, 20)]
+
+
 def _dcg(scores: list[float] | np.ndarray) -> float:
-    arr = np.asarray(scores)
-    if arr.size == 0:
+    n = len(scores)
+    if n == 0:
         return 0.0
-    return float(np.sum((2.0 ** arr - 1.0) / np.log2(np.arange(2, arr.size + 2))))
+    s = 0.0
+    for i in range(n):
+        s += (2.0 ** scores[i] - 1.0) * _LOG2_INV[i]
+    return s
 
 
 def _ideal_dcg(scores: list[float] | np.ndarray) -> float:
-    return _dcg(np.sort(np.asarray(scores))[::-1])
+    return _dcg(sorted(scores, reverse=True))
 
 
 def _ndcg(scores: list[float] | np.ndarray) -> float:
@@ -1715,6 +1817,7 @@ def metaphone(word: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+@functools.lru_cache(maxsize=65536)
 def porter_stem(word: str) -> str:
     """Simplified Porter Stemmer for English words."""
     word = word.lower()
@@ -2081,43 +2184,62 @@ CoordinateAscent = LambdaMART
 class NoisyChannelSpeller:
     """Simple noisy-channel spell corrector using edit distance + unigram frequency."""
 
-    __slots__ = ("dictionary", "max_edits", "_dict_keys")
+    __slots__ = ("dictionary", "max_edits", "_dict_keys", "_correct_cache")
 
     def __init__(self, dictionary: dict[str, int], max_edits: int = 2) -> None:
         self.dictionary = dictionary
         self.max_edits = max_edits
         self._dict_keys = set(dictionary)
+        self._correct_cache: dict[str, str] = {}
 
-    def _edits1(self, word: str) -> set[str]:
+    @staticmethod
+    @functools.lru_cache(maxsize=65536)
+    def _edits1(word: str) -> frozenset[str]:
         letters = "abcdefghijklmnopqrstuvwxyz"
-        edits: set[str] = set()
-        for i in range(len(word) + 1):
-            a, b = word[:i], word[i:]
-            if b:
+        edits: set[str] = {word}
+        wlen = len(word)
+        for i in range(wlen + 1):
+            a = word[:i]
+            b = word[i:]
+            blen = len(b)
+            if blen:
+                # delete
                 edits.add(a + b[1:])
-                if len(b) > 1:
+                if blen > 1:
+                    # transpose
                     edits.add(a + b[1] + b[0] + b[2:])
+                # replace
                 for c in letters:
                     edits.add(a + c + b[1:])
+            # insert
             for c in letters:
                 edits.add(a + c + b)
-        return edits
+        return frozenset(edits)
 
-    def _candidates(self, word: str) -> set[str]:
-        candidates = {word} | self._edits1(word)
+    def _candidates(self, word: str) -> frozenset[str]:
+        candidates = self._edits1(word)
         if self.max_edits >= 2:
-            candidates |= {e2 for w in candidates for e2 in self._edits1(w)}
+            candidates = candidates | frozenset(
+                e2 for w in candidates for e2 in self._edits1(w)
+            )
         return candidates & self._dict_keys or candidates
 
     def correct(self, word: str) -> str:
         """Return the most likely correction for *word*."""
         word = word.lower()
+        cached = self._correct_cache.get(word)
+        if cached is not None:
+            return cached
         if word in self.dictionary:
+            self._correct_cache[word] = word
             return word
         candidates = self._candidates(word) & self._dict_keys
         if not candidates:
+            self._correct_cache[word] = word
             return word
-        return max(candidates, key=lambda w: self.dictionary[w])
+        result = max(candidates, key=lambda w: self.dictionary[w])
+        self._correct_cache[word] = result
+        return result
 
 
 # ---------------------------------------------------------------------------

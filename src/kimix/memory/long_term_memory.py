@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import heapq
-import json
 import math
 import os
 import time
+
 import numpy as np
+import orjson
 
 from kimix.memory.types import MemoryEntry, MemoryType, _DECAY_COEFF
 from kimix.memory.embedding import EmbeddingProvider
@@ -53,7 +54,7 @@ class LongTermMemory:
         "_doc_id_map", "_bm25_doc_to_entry_id", "_next_doc_id",
         "_simhash_lsh", "_near_dup_threshold",
         "_imatch_map", "_soundex_map", "_metaphone_map",
-        "_speller",
+        "_speller", "_bm25_last_built_count",
     )
 
     def __init__(
@@ -90,6 +91,7 @@ class LongTermMemory:
         self._soundex_map: dict[str, set[str]] = {}
         self._metaphone_map: dict[str, set[str]] = {}
         self._speller: NoisyChannelSpeller | None = None
+        self._bm25_last_built_count = 0
 
         self._load()
 
@@ -105,6 +107,7 @@ class LongTermMemory:
         self._bm25_searcher = None
         self._bm25_doc_to_entry_id = []
         self._doc_id_map = {}
+        self._bm25_last_built_count = 0
         self._next_doc_id = 0
         self._speller = None
 
@@ -127,9 +130,10 @@ class LongTermMemory:
                 return eid
         return None
 
-    def _insert_entry(self, entry_id: str, entry: MemoryEntry, *, invalidate_bm25: bool = True) -> None:
+    def _insert_entry(self, entry_id: str, entry: MemoryEntry, *, invalidate_bm25: bool = False) -> None:
         if self._backend is not None:
             self._backend.store(entry, entry_id, dim=self.dim)
+            self.entries[entry_id] = entry
         else:
             dup_id = self._find_near_duplicate(entry.content)
             if dup_id is not None:
@@ -185,25 +189,30 @@ class LongTermMemory:
         idx.finalize()
         self._bm25_index = idx
         self._bm25_searcher = Searcher(idx, tokenizer=tokenizer)
+        self._bm25_last_built_count = self.count()
         return self._bm25_searcher
 
     def _ensure_bm25(self) -> Searcher:
         if self._bm25_searcher is None:
             return self._build_bm25()
+        current_count = self.count()
+        if current_count != self._bm25_last_built_count:
+            threshold = max(5, min(100, self._bm25_last_built_count // 10))
+            if abs(current_count - self._bm25_last_built_count) >= threshold:
+                return self._build_bm25()
         return self._bm25_searcher
 
     def _iter_entries(self):
-        if self._backend is not None:
+        if self._backend is not None and not self.entries:
             for eid, entry in self._backend.list_all(
                 agent_id=self._agent_id,
                 exclude_expired=False,
                 dim=self.dim,
                 include_embedding=True,
             ):
-                yield eid, entry
-        else:
-            for eid, entry in self.entries.items():
-                yield eid, entry
+                self.entries[eid] = entry
+        for eid, entry in self.entries.items():
+            yield eid, entry
 
     def _get_entry(self, entry_id: str) -> MemoryEntry | None:
         if self._backend is not None:
@@ -221,8 +230,8 @@ class LongTermMemory:
         if self._backend is not None:
             return
         try:
-            with open(self.storage_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            with open(self.storage_path, "rb") as f:
+                data = orjson.loads(f.read())
             for item in data:
                 entry = MemoryEntry.from_dict(item)
                 if entry.agent_id != self._agent_id:
@@ -243,7 +252,7 @@ class LongTermMemory:
                 first = tokens[0] if tokens else ""
                 self._soundex_map.setdefault(soundex(first), set()).add(entry_id)
                 self._metaphone_map.setdefault(metaphone(first), set()).add(entry_id)
-        except (FileNotFoundError, json.JSONDecodeError):
+        except (FileNotFoundError, orjson.JSONDecodeError):
             pass
 
     def _save(self) -> None:
@@ -251,9 +260,10 @@ class LongTermMemory:
             return
         if not self._dirty:
             return
-        data = [e.to_dict() for e in self.entries.values()]
-        with open(self.storage_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        now = time.time()
+        data = [e.to_dict(now) for e in self.entries.values()]
+        with open(self.storage_path, "wb") as f:
+            f.write(orjson.dumps(data))
         self._dirty = False
 
     def store(
@@ -308,13 +318,14 @@ class LongTermMemory:
 
         if self._backend is not None and batch:
             self._backend.store_many(batch, dim=self.dim)
+            for entry_id, entry in batch:
+                self.entries[entry_id] = entry
         else:
             for entry_id, entry in batch:
                 self.entries[entry_id] = entry
                 self._update_index(entry_id, entry)
             self._dirty = True
 
-        self._invalidate_bm25()
         self._save()
         return results
 
@@ -420,32 +431,28 @@ class LongTermMemory:
             for entry, vec in zip(missing, vecs):
                 entry.embedding = vec
 
-        try:
-            embeddings = np.stack([entry.embedding for entry in candidates])
-        except (TypeError, ValueError):
-            embeddings = np.array([entry.embedding for entry in candidates], dtype=np.float32)
+        # Pre-allocate embedding matrix to avoid np.stack overhead.
+        # All embeddings from EmbeddingProvider are unit-normalized float32.
+        embeddings = np.empty((n_cand, self.dim), dtype=np.float32)
+        timestamps = np.empty(n_cand, dtype=np.float64)
+        access_counts = np.empty(n_cand, dtype=np.float64)
+        importances = np.empty(n_cand, dtype=np.float64)
+        for i, entry in enumerate(candidates):
+            emb = entry.embedding
+            if emb is None:
+                embeddings[i] = 0.0
+            else:
+                embeddings[i] = emb
+            timestamps[i] = entry.timestamp
+            access_counts[i] = entry.access_count
+            importances[i] = entry.importance
 
-        query_arr = np.asarray(query_vec, dtype=np.float32)
-        q_norm = float(np.linalg.norm(query_arr))
-        if q_norm == 0:
-            semantic_arr = np.zeros(n_cand, dtype=np.float64)
-        else:
-            dots = embeddings @ query_arr
-            norms = np.linalg.norm(embeddings, axis=1)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                sims = np.where(norms == 0, 0.0, dots / (norms * q_norm))
-
-            timestamps = np.empty(n_cand, dtype=np.float64)
-            access_counts = np.empty(n_cand, dtype=np.float64)
-            importances = np.empty(n_cand, dtype=np.float64)
-            for i, entry in enumerate(candidates):
-                timestamps[i] = entry.timestamp
-                access_counts[i] = entry.access_count
-                importances[i] = entry.importance
-            recency = np.exp(_DECAY_COEFF * (now - timestamps))
-            access_boost = np.minimum(access_counts * 0.1, 2.0)
-            eff = importances * recency * (1.0 + access_boost)
-            semantic_arr = sims.astype(np.float64) * eff
+        query_arr = query_vec if isinstance(query_vec, np.ndarray) and query_vec.dtype == np.float32 else np.asarray(query_vec, dtype=np.float32)
+        dots = embeddings @ query_arr
+        recency = np.exp(_DECAY_COEFF * (now - timestamps))
+        access_boost = np.minimum(access_counts * 0.1, 2.0)
+        eff = importances * recency * (1.0 + access_boost)
+        semantic_arr = dots.astype(np.float64) * eff
 
         bm25_arr = np.zeros(n_cand, dtype=np.float64)
         string_arr = np.zeros(n_cand, dtype=np.float64)
@@ -550,7 +557,7 @@ class LongTermMemory:
             if features:
                 doc_features = [(i, f) for i, f in zip(top_indices, features)]
                 if ltr_model == "lambdamart":
-                    model: LambdaMART | RankSVM | RankBoost = LambdaMART(n_iterations=10, learning_rate=0.05)
+                    model: LambdaMART | RankSVM | RankBoost = LambdaMART(n_iterations=3, learning_rate=0.05)
                 elif ltr_model == "ranksvm":
                     model = RankSVM(learning_rate=0.01, n_iterations=50)
                 else:
@@ -644,13 +651,13 @@ class LongTermMemory:
 
         if self._backend is not None and batch:
             self._backend.store_many(batch, dim=self.dim)
+            for entry_id, entry in batch:
+                self.entries[entry_id] = entry
         else:
             for entry_id, entry in batch:
                 self.entries[entry_id] = entry
                 self._update_index(entry_id, entry)
             self._dirty = True
-
-        self._invalidate_bm25()
 
         migrate_ids = {id(entry) for entry in to_migrate}
         short_term.buffer = [e for e in short_term.buffer if id(e) not in migrate_ids]

@@ -22,7 +22,11 @@ class WorkingMemory:
     def get_context(self, n: int = 5) -> list[MemoryEntry]:
         if n <= 0:
             return []
-        return list(self.items)[-n:]
+        buf = self.items
+        m = len(buf)
+        if n >= m:
+            return list(buf)
+        return [buf[i] for i in range(-n, 0)]
 
     def clear(self) -> None:
         self.items.clear()
@@ -31,4 +35,6 @@ class WorkingMemory:
     def summarize(self) -> str:
         if not self.items:
             return ""
-        return " | ".join(item.content for item in list(self.items)[-3:])
+        buf = self.items
+        n = min(3, len(buf))
+        return " | ".join(buf[i].content for i in range(-n, 0))

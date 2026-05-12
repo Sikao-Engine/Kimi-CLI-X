@@ -160,7 +160,7 @@ class TestAskThinkingEffort:
     def test_default(self) -> None:
         with patch("builtins.input", return_value=""):
             result = init_module._ask_thinking_effort()
-        assert result == "low"
+        assert result == "max"
 
     def test_custom_valid(self) -> None:
         with patch("builtins.input", return_value="high"):
@@ -417,5 +417,5 @@ class TestInit:
             mock_orjson.OPT_INDENT_2 = 1
             init_module.init()
 
-        mock_orjson.loads.assert_called_once()
+        assert mock_orjson.loads.called
         mock_orjson.dumps.assert_called_once()

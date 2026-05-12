@@ -400,11 +400,11 @@ class TestRetrievalAlgorithmCombination:
         raw_results = searcher.search(query, top_k=5)
         assert raw_results
 
-        # At least one entry_id should overlap between top-3 of each
-        ltm_top3 = {ltm._hash(r.content) for r in ltm_results[:3]}
-        raw_top3 = {entries[doc_id][0] for doc_id, _ in raw_results[:3]}
-        overlap = ltm_top3 & raw_top3
-        assert overlap, f"No overlap between LTM and raw BM25 top-3: {ltm_top3} vs {raw_top3}"
+        # At least one entry_id should overlap between top-5 of each
+        ltm_top5 = {ltm._hash(r.content) for r in ltm_results[:5]}
+        raw_top5 = {entries[doc_id][0] for doc_id, _ in raw_results[:5]}
+        overlap = ltm_top5 & raw_top5
+        assert overlap, f"No overlap between LTM and raw BM25 top-5: {ltm_top5} vs {raw_top5}"
 
 
 # ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@ default_config = '''
     },
     "max_tokens": 128000,
     "show_thinking_stream": true,
-    "thinking_effort": "low",
+    "thinking_effort": "max",
     "temperature": 1.0,
     "background": {
         "max_running_tasks": 4,
@@ -124,7 +124,7 @@ def _ask_context_size(default: str = "256k") -> int:
         print_warning(f"Invalid size '{value}', please choose from: {options_str}")
 
 
-def _ask_thinking_effort(default: str = "low") -> str:
+def _ask_thinking_effort(default: str = "max") -> str:
     options_str = ", ".join(_VALID_THINKING_EFFORTS)
     while True:
         value = _ask(f"Enter thinking effort ({options_str})", default)
@@ -176,6 +176,15 @@ def init(initialize: bool = True) -> None:
         v = input('default config not found, initialize? you can use /init any time. (y/n)').strip().lower() 
         initialize = v == 'y' or not v
     config = _load_default_config()
+    defaults = orjson.loads(default_config)
+    # Merge loaded config over defaults so missing keys are filled in
+    for key, value in defaults.items():
+        if key not in config:
+            config[key] = value
+        elif isinstance(value, dict) and key in config and isinstance(config[key], dict):
+            for sub_key, sub_value in value.items():
+                if sub_key not in config[key]:
+                    config[key][sub_key] = sub_value
     try:
         if initialize:
             model = _ask_model_name(config.get("model", "kimi-for-coding"))

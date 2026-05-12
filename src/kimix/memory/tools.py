@@ -91,12 +91,12 @@ class Recall(CallableTool2):
     description: str = "Search and retrieve memories across all tiers."
     params: type[BaseModel] = RecallParams
 
-    def __init__(self, session: Session):
+    def __init__(self, session: Session | None = None):
         super().__init__()
         self._session = session
 
     async def __call__(self, params: RecallParams) -> ToolReturnValue:
-        if self._session.get_custom_data().get("is_sub_agent"):
+        if self._session is not None and self._session.get_custom_data().get("is_sub_agent"):
             params.use_agent = False
         try:
             memory = await _get_memory_system()

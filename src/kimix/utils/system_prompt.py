@@ -25,7 +25,7 @@ def get_system_prompt(
         yolo: bool | None = None,
         work_dir: Optional[KaosPath] = None,
         extra_system_prompt: str | None = None,
-        agent_role: SystemPromptType = SystemPromptType.Worker
+        agent_role: SystemPromptType = SystemPromptType.Worker,
 ) -> Callable[[BuiltinSystemPromptArgs], str]:
     agent_md = (Path(str(work_dir)) if work_dir is not None else Path(
         os.curdir)) / 'AGENTS.md'
@@ -39,20 +39,14 @@ def get_system_prompt(
         use_skills = False
         if agent_role != SystemPromptType.Thinker:
             items.append('No pseudocode, flowcharts, reasoning, planning, filler, restating, or self-correction. Act directly.')
-        def worker_logic():
+        def worker_logic(role: str):
             nonlocal role_doc, use_agent_md, use_skills
             use_agent_md = True
             use_skills = True
-            role_doc = 'You are a terse coder'
+            role_doc = f'You are a {role}'
             items.append('Interactive: `Run` short timeout, then `TaskOutput`/`Input`.')
             items.append('Python: `python -c <code>`.')
             items.append('Multi-step: use `SetTodoList`. Finish all before ending.')
-            # if not is_sub_agent:
-            #     items.append(
-            #         'Use `Agent` for: "parallelizable independent subtasks", '
-            #         '"large-context analysis or tasks needing different expertise", '
-            #         '"permission-graded operations like read-only analysis or sandboxed execution".'
-            #     )
             if args.KIMI_OS != 'Windows':
                 items.append(f'Shell: {args.KIMI_SHELL}. Use `Run`.')
             else:
@@ -63,10 +57,9 @@ def get_system_prompt(
             items.append('Drop context aggressively. `Remember` important/long-running info.')
             items.append('`Forget` stale or duplicate info.')
             items.append('`Recall` before any work.')
-            items.append('Use `Agent` to enable sub-agent, for research, analyze, find, retrieval.')
         match agent_role:
             case SystemPromptType.Worker:
-                worker_logic()
+                worker_logic('terse coder')
             case SystemPromptType.TodoMaker:
                 use_agent_md = True
                 use_skills = True
@@ -74,6 +67,7 @@ def get_system_prompt(
                 items.append('Plan only. Do not implement.')
                 items.append('Record steps with `Note`.')
                 items.append('No multiple steps at once.')
+                items.append('Use `Agent` to enable sub-agent, for research, analyze, find, retrieval.')
             case SystemPromptType.SwarmCoordinator:
                 use_agent_md = True
                 use_skills = True
@@ -85,7 +79,7 @@ def get_system_prompt(
                 items.append('Report nodes and edges.')
                 items.append('`SkillSearch` for skills.')
             case SystemPromptType.Thinker:
-                worker_logic()
+                worker_logic('thinker')
                 items.append('Think in <thinking>...</thinking>. End with <quit/>. Concise. No text outside tags.')
                 items.append('Self-verify: catch errors and bad assumptions.')
             case SystemPromptType.Recaller:
