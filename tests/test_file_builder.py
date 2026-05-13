@@ -242,6 +242,11 @@ class TestFileBuilder:
         d = tmp_path / "src"
         d.mkdir()
         (d / "a.py").write_text("line one\nline two\nline three\n")
+        # Prevent stale caches from polluting this test
+        cache_path = tmp_path / "hashes.index_cache.pkl"
+        build_cache_path = tmp_path / "hashes.build_cache.pkl"
+        for p in [cache_path, build_cache_path]:
+            p.unlink(missing_ok=True)
         fb = FileBuilder([d], tmp_path / "hashes.json")
         results = fb.search("three")
         assert len(results) > 0
