@@ -147,10 +147,33 @@ _BASH_COMMANDS: dict[str, CallableTool2] = {
     "zip": Zip(),
 }
 
+# Map Windows CMD / PowerShell command names to their bash equivalents.
+_WINDOWS_ALIASES: dict[str, str] = {
+    # CMD
+    "dir": "ls",
+    "copy": "cp",
+    "move": "mv",
+    "del": "rm",
+    "erase": "rm",
+    "ren": "mv",
+    "rename": "mv",
+    "type": "cat",
+    "fc": "diff",
+    # PowerShell
+    "Get-ChildItem": "ls",
+    "Copy-Item": "cp",
+    "Move-Item": "mv",
+    "Remove-Item": "rm",
+    "Get-Content": "cat",
+    "Get-Location": "pwd",
+    "Get-Process": "ps",
+    "Select-String": "grep",
+}
+
 
 class RunParams(BaseModel):
     path: str = Field(
-        description="Executable path or basic bash cmd."
+        description="Executable path or basic linux-bash cmd."
     )
     args: list[str] = Field(
         default_factory=list,
@@ -254,7 +277,8 @@ class Run(CallableTool2[RunParams]):
         async with self._semaphore:
             import sys
 
-            bash_tool = _BASH_COMMANDS.get(params.path)
+            bash_name = _WINDOWS_ALIASES.get(params.path, params.path)
+            bash_tool = _BASH_COMMANDS.get(bash_name)
             if bash_tool:
                 return await self._run_bash_tool(params, bash_tool)
 
