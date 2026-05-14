@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from pydantic import BaseModel, Field
@@ -60,10 +61,37 @@ class Retrieve(CallableTool2[IndexerParams]):
                         provider_dict = dict(default_sub_provider) if default_sub_provider is not None else dict(custom_config.get("provider_dict", {}))
                         provider_dict.setdefault('loop_control', {})['max_ralph_iterations'] = 0
                         if params.dest_path is not None:
-                            dest_path = params.dest_path
+                            valid_paths = []
+                            for dp in params.dest_path:
+                                if not dp or not dp.strip():
+                                    continue
+                                p = Path(dp)
+                                if not p.exists():
+                                    continue
+                                if not p.is_dir():
+                                    continue
+                                try:
+                                    if not any(p.iterdir()):
+                                        continue
+                                except PermissionError:
+                                    pass
+                                valid_paths.append(dp)
+                            dest_path = valid_paths
                         else:
                             skill_dirs = [str(d) for d in get_skill_dirs(use_kaos_path=False)]
-                            dest_path = skill_dirs + ['.kimix_cache/'] if skill_dirs else ['.kimix_cache/']
+                            cache_dir = Path('.kimix_cache/')
+                            cache_path = str(cache_dir) if cache_dir.exists() else None
+                            if skill_dirs and cache_path:
+                                dest_path = skill_dirs + [cache_path]
+                            elif skill_dirs:
+                                dest_path = skill_dirs
+                            elif cache_path:
+                                dest_path = [cache_path]
+                            else:
+                                dest_path = []
+                        
+                        if not dest_path:
+                            return "No valid destination paths found."
                         dest_path_str = ', '.join(dest_path)
                         session = await _create_session_async(
                             agent_file=base._default_agent_file_dir / 'agent_searcher.yaml',
