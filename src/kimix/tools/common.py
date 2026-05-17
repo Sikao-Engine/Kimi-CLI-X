@@ -10,15 +10,12 @@ from kimi_cli.session import Session
 
 if TYPE_CHECKING:
     from kimix.tools.background.utils import BackgroundStream
-OUTPUT_TOKEN_LIMIT = 1024
+OUTPUT_LIMIT = 65536
 _temp_folder = Path.home() / '.kimi' / 'sessions'
 _temp_idx = 0
 _temp_set: dict[Path, int] = dict()
 
 
-def _estimate_tokens(text: str) -> int:
-    """Rough estimation of token count (approximately 4 characters per token)."""
-    return len(text) // 4
 
 
 def _create_temp_file_name(ext: str = '.md') -> str:
@@ -88,7 +85,7 @@ def _maybe_export_output(output: str, key: Path | None = None) -> str:
     """
     if not output:
         return ''
-    if _estimate_tokens(output) > OUTPUT_TOKEN_LIMIT:
+    if len(output) > OUTPUT_LIMIT:
         if key is not None:
             if type(key) is not Path:
                 key = Path(key)
@@ -110,7 +107,7 @@ async def _maybe_export_output_async(output: str, key: Path | None = None) -> st
     """
     if not output:
         return ''
-    if _estimate_tokens(output) > OUTPUT_TOKEN_LIMIT:
+    if len(output) > OUTPUT_LIMIT:
         if key is not None:
             if type(key) is not Path:
                 key = Path(key)

@@ -8,7 +8,6 @@ from kimi_cli.session import Session
 
 from kimix.utils import close_session_async, _create_session_async
 from kimix.base import get_skill_dirs
-from kimix.tools.common import _maybe_export_output_async
 from kimix.utils.system_prompt import SystemPromptType, SystemPromptCallback
 
 
@@ -53,6 +52,7 @@ class Search(CallableTool2[IndexerParams]):
 
                 async def prompt_async(cancel_callable=None):
                     session = None
+                    err_msg_inner = None
                     try:
                         import kimix.base as base
                         custom_config = self._session.custom_config
@@ -90,31 +90,37 @@ class Search(CallableTool2[IndexerParams]):
                                 dest_path = []
                         
                         if not dest_path:
-                            return "No valid destination paths found."
-                        dest_path_str = ', '.join(dest_path)
-                        session = await _create_session_async(
-                            agent_file=base._default_agent_file_dir / 'agent_searcher.json',
-                            agent_type=SystemPromptType.SkillSearcher,
-                            provider_dict=provider_dict,
-                            chat_provider=chat_provider,
-                            thinking=False,
-                            max_ralph_iterations=0
-                        )
-                        session.get_custom_config()['is_sub_agent'] = True
-                        import kimix.utils as utils
-                        prompt = f'Search:\n```\n{params.prompt}\n```in `{dest_path_str}`'
-                        await utils.prompt_async(prompt_str=prompt, session=session, output_function=output_function, info_print=False, cancel_callable=cancel_callable, merge_wire_messages=True)
+                            err_msg_inner = "No valid destination paths found."
+                        else:
+                            dest_path_str = ', '.join(dest_path)
+                            session = await _create_session_async(
+                                agent_file=base._default_agent_file_dir / 'agent_searcher.json',
+                                agent_type=SystemPromptType.SkillSearcher,
+                                provider_dict=provider_dict,
+                                chat_provider=chat_provider,
+                                thinking=False,
+                                max_ralph_iterations=0
+                            )
+                            sub_custom_config = session.get_custom_config()
+                            if sub_custom_config is not None:
+                                sub_custom_config['is_sub_agent'] = True
+                            import kimix.utils as utils
+                            prompt = f'Search:\n```\n{params.prompt}\n```in `{dest_path_str}`'
+                            await utils.prompt_async(prompt_str=prompt, session=session, output_function=output_function, info_print=False, cancel_callable=cancel_callable, merge_wire_messages=True)
                     except Exception as e:
-                        return str(e)
+                        err_msg_inner = str(e)
                     finally:
                         if session:
-                            await close_session_async(session)
-                    return None
+                            try:
+                                await close_session_async(session)
+                            except Exception:
+                                pass
+                    return err_msg_inner
 
                 err_msg = await prompt_async()
-                output = await _maybe_export_output_async('\n'.join(output_strs))
                 if err_msg:
-                    return ToolError(output=output, message=err_msg, brief='')
+                    return ToolError(output='\n'.join(output_strs), message=err_msg, brief='skill search task failed')
+                output = '\n'.join(output_strs)
                 return ToolOk(output=output)
             except Exception as exc:
                 return ToolError(

@@ -103,9 +103,11 @@ def get_system_prompt(
                 use_skills = True
                 role_doc = 'You are a supervisor'
                 items.append('Plan only. No implement. Delegate tasks to worker agents via the `Agent` tool instead.')
+                items.append('One sub-agent per task; never assign multiple tasks to the same sub-agent.')
                 items.append('Multi-step: use `SetTodoList`. Finish all before ending.')
                 items.append("Review outputs, maintain oversight, and integrate results.")
                 items.append('`Search` to search, retrieve skills, docs.')
+                items.append('Write specific, comprehensive prompts for sub-agents: specify which skills, directories, and files to use, and provide all relevant context.')
 
         if use_agent_md and agent_md.is_file():
             agent_md_content = agent_md.read_text(
