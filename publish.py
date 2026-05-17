@@ -4,6 +4,7 @@ import subprocess
 import shutil
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -94,14 +95,31 @@ def stop_local_pip_server(proc: subprocess.Popen) -> None:
 
 
 def test_install_from_local(package_name: str, port: int = 8765) -> int:
-    """从 local pip server 安装包，验证 artifact 可用性"""
+    """从 local pip server 安装包到临时 venv，验证 artifact 可用性"""
     url = f"http://localhost:{port}/"
     print(f"🧪 从 local pip server 测试安装 {package_name} ...")
-    return run_cmd([
-        "uv", "pip", "install", package_name,
-        "--find-links", url,
-        "--force-reinstall",
-    ])
+
+    # 创建临时 venv，避免覆盖当前环境（Windows 上可能锁定 exe）
+    tmpdir = Path(tempfile.mkdtemp(prefix="publish_test_"))
+    venv_dir = tmpdir / "venv"
+    try:
+        if run_cmd(["uv", "venv", str(venv_dir)]) != 0:
+            print("❌ 创建临时 venv 失败")
+            return 1
+
+        if sys.platform == "win32":
+            python_exe = venv_dir / "Scripts" / "python.exe"
+        else:
+            python_exe = venv_dir / "bin" / "python"
+
+        return run_cmd([
+            "uv", "pip", "install", package_name,
+            "--find-links", url,
+            "--force-reinstall",
+            "--python", str(python_exe),
+        ])
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def bump_patch_version(version: str) -> str:
