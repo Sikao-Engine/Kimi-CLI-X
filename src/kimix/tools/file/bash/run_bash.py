@@ -1,6 +1,7 @@
 """Standalone async function for executing Bash built-in commands, with subprocess fallback."""
 
 import queue
+import sys
 from typing import TYPE_CHECKING
 
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
@@ -52,7 +53,11 @@ async def run_bash(params: "BashParams | RunParams", session: Session) -> ToolRe
         from pathlib import Path
 
         is_process = False
-        if os.sep in cmd or "/" in cmd:
+        # check if using python
+        if params.path == 'python':
+            params.path = sys.executable
+            is_process = True
+        elif os.sep in cmd or "/" in cmd:
             is_process = Path(cmd).is_file()
         else:
             is_process = shutil.which(cmd) is not None
@@ -66,7 +71,7 @@ async def run_bash(params: "BashParams | RunParams", session: Session) -> ToolRe
 
         # Run as real subprocess via ProcessTask
         task = ProcessTask(cmd, params.args, params.cwd, env=None)
-        task_id = await task.start(session, "bash", cmd)
+        task_id = await task.start(session, "bash_proc", cmd)
 
         wait_timeout = params.timeout
         await task.wait(wait_timeout)

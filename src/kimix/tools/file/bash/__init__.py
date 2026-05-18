@@ -452,11 +452,13 @@ class Bash(CallableTool2[BashParams]):
     """Execute a bash command using built-in Python implementations, with background task support."""
 
     name: str = "Bash"
-    description: str = "Execute a bash command using built-in Python implementations (cat, ls, grep, etc.)."
+    description: str = "Execute a bash command using built-in Python implementations."
     params: type[BashParams] = BashParams
 
     def __init__(self, session: Session):
         super().__init__()
+        import os
+        os.environ['PYTHONIOENCODING'] = 'utf-8'
         self._session = session
 
     @classmethod

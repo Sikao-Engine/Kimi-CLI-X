@@ -2,6 +2,7 @@
 import anyio
 import asyncio
 from pathlib import Path
+import sys
 
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from pydantic import BaseModel, Field
@@ -13,7 +14,7 @@ from kimix.tools.file.bash.run_bash import run_bash
 
 class RunParams(BaseModel):
     path: str = Field(
-        description="Executable path or basic linux-bash cmd."
+        description="Executable path or bash command."
     )
     args: list[str] = Field(
         default_factory=list,
@@ -81,7 +82,10 @@ class Run(CallableTool2[RunParams]):
         import os
 
         is_process = False
-        if os.sep in params.path or "/" in params.path:
+        if params.path == 'python':
+            params.path = sys.executable
+            is_process = True
+        elif os.sep in params.path or "/" in params.path:
             # Contains path separator - check if it's an existing file
             is_process = Path(params.path).is_file()
         else:
@@ -93,13 +97,14 @@ class Run(CallableTool2[RunParams]):
             bash_name = _WINDOWS_ALIASES.get(params.path, params.path)
             if bash_name in _BASH_COMMANDS:
                 return await run_bash(params, self._session)
+            else:
+                return ToolError(
+                    output="",
+                    message=f"Command not found: '{params.path}' is not a valid executable or bash built-in command.",
+                    brief="Command not found"
+                )
 
         async with self._semaphore:
-            import sys
-
-            # check if using python
-            if params.path == 'python':
-                params.path = sys.executable
             env_dict: dict[str, str] | None = None
             if params.env:
                 env_dict = {}
