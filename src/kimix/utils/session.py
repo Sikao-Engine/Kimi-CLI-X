@@ -59,6 +59,7 @@ async def _create_session_async(
     max_steps_per_turn: int | None = None,
     max_retries_per_step: int | None = None,
     max_ralph_iterations: int | None = None,
+    anonymous: bool = False,
 ) -> Session:
     # create cache dir
     if work_dir:
@@ -95,6 +96,7 @@ async def _create_session_async(
             max_steps_per_turn=max_steps_per_turn,
             max_retries_per_step=max_retries_per_step,
             max_ralph_iterations=max_ralph_iterations,
+            anonymous=anonymous,
         )
         if not session:
             print_debug(f'Session {session_id} not found.')
@@ -114,6 +116,7 @@ async def _create_session_async(
             max_steps_per_turn=max_steps_per_turn,
             max_retries_per_step=max_retries_per_step,
             max_ralph_iterations=max_ralph_iterations,
+            anonymous=anonymous,
         )
     # save config
     custom_config = session.get_custom_config()
@@ -139,6 +142,7 @@ def create_session(
     max_steps_per_turn: int | None = None,
     max_retries_per_step: int | None = None,
     max_ralph_iterations: int | None = None,
+    anonymous: bool = False,
 ) -> Session:
     return asyncio.run(_create_session_async(
         session_id=session_id,
@@ -156,6 +160,7 @@ def create_session(
         max_steps_per_turn=max_steps_per_turn,
         max_retries_per_step=max_retries_per_step,
         max_ralph_iterations=max_ralph_iterations,
+        anonymous=anonymous,
     ))
 
 

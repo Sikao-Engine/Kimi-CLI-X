@@ -99,6 +99,7 @@ class Search(CallableTool2[IndexerParams]):
                                 provider_dict=provider_dict,
                                 chat_provider=chat_provider,
                                 thinking=False,
+                                anonymous=True,
                                 max_ralph_iterations=0
                             )
                             sub_custom_config = session.get_custom_config()

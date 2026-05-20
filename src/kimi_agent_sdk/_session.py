@@ -167,6 +167,7 @@ class Session:
         mcp_configs: list[MCPConfig] | list[dict[str, Any]] | None = None,
         skills_dir: KaosPath | None = None,
         skills_dirs: list[KaosPath] | None = None,
+        anonymous: bool = False,
         # Loop control
         max_steps_per_turn: int | None = None,
         max_retries_per_step: int | None = None,
@@ -231,7 +232,7 @@ class Session:
             **custom_arguments
         )
         session = Session(cli)
-        session._anonymous = session_id is None
+        session._anonymous = anonymous if anonymous else session_id is None
         session_dir = cli.session.dir
         state_file = session_dir / "state.json"
         if state_file.exists():
@@ -270,6 +271,7 @@ class Session:
         mcp_configs: list[MCPConfig] | list[dict[str, Any]] | None = None,
         skills_dir: KaosPath | None = None,
         skills_dirs: list[KaosPath] | None = None,
+        anonymous: bool = False,
         # Loop control
         max_steps_per_turn: int | None = None,
         max_retries_per_step: int | None = None,
@@ -336,7 +338,7 @@ class Session:
             **custom_arguments
         )
         session = Session(cli)
-        session._anonymous = session_id is None
+        session._anonymous = anonymous if anonymous else session_id is None
         session._create_kwargs = {
             "config": config,
             "model_name": model,
@@ -483,8 +485,6 @@ class Session:
         finally:
             if self._cancel_event is cancel_event:
                 self._cancel_event = None
-            self._cli.session.state.todos.clear()
-            self._cli.session.save_state()
 
     def cancel(self) -> None:
         """

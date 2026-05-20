@@ -57,6 +57,7 @@ class Agent(CallableTool2):
                             provider_dict=provider_dict,
                             chat_provider=chat_provider,
                             resume=params.session_id is not None,
+                            anonymous=True,
                             max_ralph_iterations=0)
                         sub_session_id = session.id
                         sub_custom_config = session.get_custom_config()
