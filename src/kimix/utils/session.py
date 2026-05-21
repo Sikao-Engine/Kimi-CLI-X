@@ -66,6 +66,7 @@ async def _create_session_async(
         await (work_dir / '.kimix_cache').mkdir(parents=True, exist_ok=True)
     else:
         await KaosPath('.kimix_cache').mkdir(parents=True, exist_ok=True)
+        work_dir = KaosPath('.')
     cfg, provider_dict = _create_config(provider_dict)
     session = None
     if agent_file is None:
@@ -83,7 +84,7 @@ async def _create_session_async(
     if resume:
         session = await Session.resume(
             session_id=session_id,
-            work_dir=work_dir if work_dir is not None else KaosPath('.'),
+            work_dir=work_dir,
             skills_dirs=skills_dirs,
             yolo=yolo if yolo is not None else base._default_yolo,
             thinking=thinking if thinking is not None else base._default_thinking,
@@ -103,7 +104,7 @@ async def _create_session_async(
     if not session:
         session = await Session.create(
             session_id=session_id,
-            work_dir=work_dir if work_dir is not None else KaosPath('.'),
+            work_dir=work_dir,
             skills_dirs=skills_dirs,
             yolo=yolo if yolo is not None else base._default_yolo,
             thinking=thinking if thinking is not None else base._default_thinking,

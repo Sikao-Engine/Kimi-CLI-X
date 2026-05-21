@@ -31,7 +31,11 @@ session = create_session(
     chat_provider=None,                # Optional: custom ChatProvider instance
     agent_type=SystemPromptType.Worker, # Optional: Worker, TodoMaker, Thinker, etc.
     vfs_path=None,                     # Optional: Path for virtual file system
-    extra_system_prompt=None           # Optional: additional system prompt text
+    extra_system_prompt=None,          # Optional: additional system prompt text
+    max_steps_per_turn=None,           # Optional: max steps per turn
+    max_retries_per_step=None,         # Optional: max retries per step
+    max_ralph_iterations=None,         # Optional: max Ralph loop iterations
+    anonymous=False,                   # Optional: anonymous session mode
 )
 
 # Close session when done
@@ -51,6 +55,10 @@ from kimix.utils.session import _create_session_async
 session = await _create_session_async(
     session_id="my_session",
     resume=True,
+    max_steps_per_turn=None,
+    max_retries_per_step=None,
+    max_ralph_iterations=None,
+    anonymous=False,
     # ... same parameters as create_session
 )
 ```
@@ -60,7 +68,9 @@ session = await _create_session_async(
 ```python
 from kimix.utils import get_default_session, _create_default_session
 
-# Get or create the global default session (session_id="default")
+# Get or create the global default session
+# If base._default_supervisor is True, creates a Supervisor session with agent_boss.json
+# Otherwise creates a Worker session
 session = _create_default_session(resume=True)
 
 # Get existing default session without creating
@@ -164,6 +174,7 @@ SystemPromptType.Thinker          # Thinker agent (thinks in <thinking> tags, se
 SystemPromptType.SwarmCoordinator # Swarm coordinator (builds dependency DAG)
 SystemPromptType.SkillSearcher    # Skill searcher (read-only, searches skills)
 SystemPromptType.TrivialSubAgent  # Read-only sub-agent (rejects write/edit tasks)
+SystemPromptType.Supervisor       # Supervisor agent (outlines, decomposes, dispatches, tracks, verifies)
 
 # Build a custom system prompt callback
 class MyCallback(SystemPromptCallback):
@@ -230,10 +241,17 @@ colored = colorful_text("Warning", fg=Color.YELLOW, styles=[Style.BOLD])
 ```python
 from kimix.base import print_agent_json
 
-# Pretty-print streaming messages from the agent session
+# Pretty-print streaming wire messages from the agent session
+# Handles multiple message types intelligently:
+# - ApprovalRequest: auto-resolves to "approve"
+# - StepBegin, StepInterrupted, CompactionEnd: silently skipped
+# - CompactionBegin: prints "Compacting..." info message
+# - ThinkPart: prints thinking content in cyan (suppressed if _quiet)
+# - TextPart: prints text chunks directly
+# - ToolCall, ToolCallPart, ToolResult: silent stream flag switch
 print_agent_json(
     wire_msg=message,
-    output_function=custom_handler  # Optional: callback for text content
+    output_function=custom_handler  # Optional: callback(text, is_think) for text/think content
 )
 ```
 
@@ -264,7 +282,12 @@ from kimix.utils import async_prompt, async_fix_error
 thread = async_prompt("Analyze this file", session=None)
 
 # Run fix_error in background thread
-thread = async_fix_error("python main.py", extra_prompt="Handle edge cases")
+# merge_wire_messages is hardcoded to True internally
+thread = async_fix_error(
+    command="python main.py",
+    extra_prompt="Handle edge cases",
+    # NOTE: no merge_wire_messages parameter - always True internally
+)
 ```
 
 ### Process Execution
@@ -391,8 +414,10 @@ from kimix.base import (
     _default_agent_file_dir, # Directory containing agent_worker.json
     _default_skill_dirs,     # List of skill directories
     _default_provider,       # Custom provider dict or None
+    _default_sub_provider,   # Custom sub-agent provider dict or None
     _default_ralph,          # Max Ralph iterations override or None
     _default_manually_cot,   # Manual chain-of-thought mode (default: False)
+    _default_supervisor,     # If True, default sessions use Supervisor role (default: False)
     _quiet,                  # If True, suppresses print_debug
     _colorful_print,         # If False, disables ANSI colors
     _print_func,             # Optional custom print handler (text, end) -> None
@@ -410,7 +435,9 @@ from kimix.base import (
     set_default_agent_file,
     set_default_skill_dirs,
     set_default_provider,
+    set_default_sub_provider,
     set_default_manually_cot,
+    set_default_supervisor,
 )
 
 # Set default configuration values
@@ -420,7 +447,9 @@ set_default_agent_file_dir(Path("./custom_agents"))
 set_default_agent_file(Path("./custom_agent.yaml"))
 set_default_skill_dirs(["./skills", "./more_skills"])
 set_default_provider({"name": "custom", "api_key": "..."})
+set_default_sub_provider({"name": "sub-custom", "api_key": "..."})
 set_default_manually_cot(False)
+set_default_supervisor(True)  # Use Supervisor role for default sessions
 ```
 
 ### Skill Directories
@@ -435,10 +464,16 @@ dirs = get_skill_dirs(use_kaos_path=True)
 ### Utility Functions
 
 ```python
-from kimix.base import percentage_str
+from kimix.base import percentage_str, percentage_and_token, generate_memory
 
 # Format number as percentage string
 s = percentage_str(0.7533)  # Returns "75.3%"
+
+# Format context usage with percentage and token count
+usage = percentage_and_token(session)  # Returns e.g. "42.5% (128000 tokens)"
+
+# Standard prompt for generating session memory summaries
+generate_memory  # String constant with structured memory generation instructions
 ```
 
 ### Path Utilities
@@ -535,11 +570,12 @@ finally:
 ## Common Imports
 
 ```python
-# Core utilities
+# Core utilities (kimix.utils.__all__)
 from kimix.utils import (
     create_session, close_session, close_session_async,
     prompt, prompt_async, clear_default_context, compact_default_context, print_usage,
-    get_default_session, get_tool_call_errors,
+    get_default_session, _create_default_session, _create_session_async,
+    get_tool_call_errors,
     cancel_prompt, get_cancel_event,
     prompt_path, fix_error, async_prompt, async_fix_error,
     context_path, delete_session_dir, make_kaos_dir,
@@ -548,19 +584,22 @@ from kimix.utils import (
     set_ralph_loop,
 )
 from kimix.utils.system_prompt import SystemPromptType, SystemPromptCallback, get_system_prompt
-from kimix.utils.session import _create_session_async
-from kimix.utils.fix_error import fix_error_async
-from kimix.utils.prompt_str import escape_file_paths, clean_text
+from kimix.utils.prompt import PlanLoader  # Plan execution helper
+from kimix.utils.fix_error import fix_error_async  # Not in top-level __all__
+from kimix.utils.prompt_str import escape_file_paths, clean_text  # Not in top-level __all__
+
 from kimix.base import (
     print_success, print_error, print_warning,
     print_info, print_debug, print_string, colorful_print, colorful_text,
     Color, BgColor, Style, run_thread, sync_all,
     run_process_with_error, run_process_with_error_async,
     run_script, print_agent_json,
-    get_skill_dirs, percentage_str, COMMON_SKILL_DIRS,
+    get_skill_dirs, percentage_str, percentage_and_token,
+    COMMON_SKILL_DIRS,
     set_default_thinking, set_default_yolo,
-    set_default_agent_file_dir, set_default_agent_file, set_default_skill_dirs, set_default_provider,
-    set_default_manually_cot,
+    set_default_agent_file_dir, set_default_agent_file,
+    set_default_skill_dirs, set_default_provider, set_default_sub_provider,
+    set_default_manually_cot, set_default_supervisor,
 )
 
 # Standard library

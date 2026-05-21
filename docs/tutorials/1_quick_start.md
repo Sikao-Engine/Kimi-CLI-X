@@ -102,35 +102,29 @@ uv run kimix
 
 ## 四、环境变量配置
 
-在运行 Kimix 之前，需要配置以下环境变量（代码逻辑参考 `src/kimix/kimi_utils.py`）：
+在运行 Kimix 之前，需要配置 API 密钥。优先使用 JSON 配置文件中的 `api_key` 字段，若未配置则依次读取以下环境变量（代码逻辑参考 `src/kimix/utils/config.py`、`src/kimix/cli_impl/init.py`）：
 
-### 必需变量
+### API 密钥环境变量
 
 | 变量名 | 说明 |
 |--------|------|
-| `KIMI_API_KEY` | **必需**。Kimi API 的访问密钥，必须以 `sk` 开头。若未设置或格式不正确，程序会报错并退出。 |
+| `KIMI_API_KEY` | Kimi API 的访问密钥 |
+| `KIMIX_API_KEY` | 备选密钥变量名，优先级低于 `KIMI_API_KEY` |
 
-### 可选变量
+### 其他环境变量
 
-| 变量名 | 说明 | 默认值 |
-|--------|------|--------|
-| `KIMI_BASE_URL` | Kimi API 的基础 URL，必须以 `http` 开头。 | `https://api.kimi.com/coding/v1` |
-| `KIMI_MODEL_NAME` | 指定使用的模型名称，必须以 `kimi` 开头。 | `kimi-for-coding` |
+除 API 密钥外，其他模型参数（URL、模型名、上下文长度等）均通过 JSON 配置文件管理，不再通过环境变量设置。详见下方「5.2 初始化 LLM 配置」。
 
 **示例（Linux / macOS）：**
 
 ```bash
-export KIMI_API_KEY=sk-your-api-key
-export KIMI_BASE_URL=https://api.kimi.com/coding/v1
-export KIMI_MODEL_NAME=kimi-for-coding
+export KIMI_API_KEY=your-api-key
 ```
 
 **示例（Windows PowerShell）：**
 
 ```powershell
-$env:KIMI_API_KEY="sk-your-api-key"
-$env:KIMI_BASE_URL="https://api.kimi.com/coding/v1"
-$env:KIMI_MODEL_NAME="kimi-for-coding"
+$env:KIMI_API_KEY="your-api-key"
 ```
 
 ---
@@ -215,7 +209,7 @@ Kimix 通过 JSON 配置文件初始化 LLM Provider。若启动时未通过 `--
 | `model_name` | 否 | 模型别名，默认为 `unknown_model` |
 | `name` | 否 | Provider 名称，默认为 `unknown` |
 | `capabilities` | 否 | 模型能力列表，可选值：`thinking`、`always_thinking`、`image_in`、`video_in`。如 `["always_thinking"]` |
-| `api_key` | 否 | API 密钥。若省略，将依次读取环境变量 `KIMI_API_KEY`、`KIMIX_API_KEY`。必须以 `sk` 开头 |
+| `api_key` | 否 | API 密钥。若省略，将依次读取环境变量 `KIMI_API_KEY`、`KIMIX_API_KEY` |
 | `custom_headers` | 否 | 自定义 HTTP 请求头 |
 | `oauth` | 否 | OAuth 配置，例如 `{"storage": "file", "key": "my-key"}` |
 | `loop_control` | 否 | 循环控制参数，含 `max_steps_per_turn`、`max_retries_per_step`、`max_ralph_iterations`、`reserved_context_size`、`compaction_trigger_ratio` |
@@ -224,6 +218,10 @@ Kimix 通过 JSON 配置文件初始化 LLM Provider。若启动时未通过 `--
 | `thinking_effort` | 否 | 思考力度，可选 `off`、`low`、`medium`、`high`、`xhigh`、`max` |
 | `temperature` | 否 | 采样温度，范围 `[0.0, 2.0]` |
 | `background` | 否 | 后台任务相关配置 |
+| `notifications` | 否 | 通知配置 |
+| `mcp` | 否 | MCP (Model Context Protocol) 配置 |
+| `env` | 否 | 启动时注入的额外环境变量（dict） |
+| `sub_provider` | 否 | 子代理 (sub-agent) 的 Provider 配置。结构与主配置相同，但 `loop_control.max_ralph_iterations` 固定为 `0`。可在 `/init` 中配置或手动添加 |
 
 **自定义配置示例（参考 `docs/anthropic.json` 等）：**
 
@@ -236,11 +234,26 @@ Kimix 通过 JSON 配置文件初始化 LLM Provider。若启动时未通过 `--
     "capabilities": ["thinking"],
     "url": "https://api.minimaxi.com/anthropic",
     "type": "anthropic",
-    "api_key": "sk-xxx",
+    "api_key": "your-api-key",
     "custom_headers": {},
     "oauth": {
         "storage": "file",
         "key": "my-key"
+    },
+    "sub_provider": {
+        "model_name": "my-sub-model",
+        "name": "my-name",
+        "model": "kimi-for-coding",
+        "max_context_size": 262144,
+        "capabilities": ["thinking"],
+        "url": "https://api.kimi.com/coding/v1",
+        "type": "kimi",
+        "api_key": "your-api-key",
+        "max_tokens": 128000,
+        "thinking_effort": "low",
+        "loop_control": {
+            "max_ralph_iterations": 0
+        }
     }
 }
 ```
@@ -257,8 +270,9 @@ Kimix 通过 JSON 配置文件初始化 LLM Provider。若启动时未通过 `--
 | `--no_color` | 关闭彩色输出 |
 | `--manually-cot` | 开启手动 CoT 模式 |
 | `--ralph` | 开启 Ralph 模式，可指定迭代次数（不传参数则为无限循环） |
+| `--supervisor` | 开启 Supervisor 模式（使用 Supervisor 角色代替默认的 Worker） |
 | `-s`, `--skill-dir` | 指定自定义的 skill 目录（可多次使用以指定多个目录） |
-| `--config` | 指定 JSON 格式的配置文件路径。若直接路径不存在，会依次在脚本所在目录的各级父目录中递归查找，最后在系统 `PATH` 中查找同名文件（格式可参考 `docs/*.json` 示例） |
+| `--config` | 指定 JSON 格式的配置文件路径。若直接路径不存在，会依次在当前工作目录的各级父目录中递归查找、在 kimix 安装目录的各级父目录中递归查找，最后在系统 `PATH` 中查找同名文件（格式可参考 `docs/*.json` 示例） |
 
 **示例：**
 
@@ -286,6 +300,7 @@ uv run kimix --clean --manually-cot
 | `/export:<path>` | 导出当前会话消息到指定文件 |
 | `/swarm` | 多 Agent 协作执行 Swarm 任务（以 `/end` 结束，`/cancel` 取消） |
 | `/ralph:on` / `/ralph:off` / `/ralph:<num>` | 设置 Ralph 模式循环次数 |
+| `/supervisor:on` / `/supervisor:off` | 开启 / 关闭 Supervisor 模式（切换后会重建会话） |
 | `/cot:on` / `/cot:off` | 开启 / 关闭手动 CoT 模式 |
 | `/plan` | 使用 Agent 队列，执行长任务（支持 `/plan:<file>` 从文件加载任务描述） |
 | `/script` | 编写并执行 Python 脚本（以 `/end` 结束输入） |

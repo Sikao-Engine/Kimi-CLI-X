@@ -1,4 +1,4 @@
-from typing import Optional, Callable
+from typing import Optional, Callable, Any
 from pathlib import Path
 import os
 import orjson
@@ -7,6 +7,29 @@ from kaos.path import KaosPath
 import kimix.base as base
 from kimi_cli.soul.agent import BuiltinSystemPromptArgs
 from kimi_cli.soul.agent import Runtime
+from kimi_cli.tools.reason import ToolCallReason
+
+
+_MAX_STEP_ENTRIES: int = 200
+
+
+def _maybe_compact_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if len(steps) <= _MAX_STEP_ENTRIES:
+        return steps
+    split = len(steps) // 2
+    compacted: list[dict[str, Any]] = []
+    for s in steps[:split]:
+        compacted.append(
+            {
+                "seq": s.get("seq"),
+                "time": s.get("time"),
+                "brief": s.get("brief"),
+                "step": "[compacted] " + (s.get("step", ""))[:100],
+                "result": "[compacted]",
+                "files": [],
+            }
+        )
+    return compacted + steps[split:]
 
 # Concise system prompt to reduce LLM overthinking and hallucination
 _SYSTEM_PROMP = (
@@ -113,7 +136,10 @@ def get_system_prompt(
         if use_agent_md and agent_md.is_file():
             agent_md_content = agent_md.read_text(
                 encoding='utf-8', errors='replace')
-            agent_md_doc = f'AGENTS.md:\n```\n{agent_md_content}\n```\n'
+            if len(agent_md_content.encode('utf-8')) > 4096:
+                agent_md_doc = 'read AGENTS.md before work\n'
+            else:
+                agent_md_doc = f'AGENTS.md:\n```\n{agent_md_content}\n```\n'
         if use_skills and args.KIMI_SKILLS:
             skill_doc = f'Skills:\n{args.KIMI_SKILLS}\n'
         numbered_block = ''
@@ -130,10 +156,12 @@ def get_system_prompt(
         extra = ''
         context_dir = runtime.session.dir
         step_mem_path = context_dir / 'steps' / f'{runtime.session.id}.json'
+        # Memory
         if step_mem_path.is_file():
             try:
                 steps = orjson.loads(step_mem_path.read_text(encoding='utf-8'))
                 if isinstance(steps, list) and steps:
+                    steps = _maybe_compact_steps(steps)
                     lines: list[str] = []
                     for s in steps:
                         seq = s.get('seq')
@@ -143,40 +171,86 @@ def get_system_prompt(
                         result = s.get('result')
                         files = s.get('files', [])
 
-                        header_parts: list[str] = []
+                        parts: list[str] = []
                         if seq is not None:
-                            header_parts.append(f"# {seq}")
+                            parts.append(f"**#{seq}**")
                         if time:
-                            header_parts.append(f"[{time}]")
+                            parts.append(f"`{time}`")
                         if brief:
-                            header_parts.append(brief)
-                        header = ' '.join(header_parts)
-
-                        body_lines: list[str] = []
+                            parts.append(f"*{brief}*")
                         if step:
-                            body_lines.append(_fmt_field("step", str(step)))
+                            step_text = str(step).replace('\n', ' ')
+                            parts.append(f"step:{step_text}")
                         if result:
-                            body_lines.append(_fmt_field("result", str(result)))
+                            result_text = str(result).replace('\n', ' ')
+                            parts.append(f"result:{result_text}")
                         if files:
-                            if isinstance(files, list):
-                                body_lines.append(_fmt_field("files", ', '.join(files)))
+                            files_list = files if isinstance(files, list) else [str(files)]
+                            if work_dir is not None:
+                                wd = Path(str(work_dir)).resolve()
+                                rel_files: list[str] = []
+                                for f in files_list:
+                                    try:
+                                        rel_files.append(str(Path(f).resolve().relative_to(wd)))
+                                    except (ValueError, OSError):
+                                        rel_files.append(str(f))
+                                files_str = ', '.join(rel_files)
                             else:
-                                body_lines.append(_fmt_field("files", str(files)))
-
-                        entry = header
-                        if body_lines:
-                            entry += '\n' + '\n'.join(body_lines)
-                        if entry:
-                            lines.append(entry)
+                                files_str = ', '.join(files_list)
+                            parts.append(f"files:{files_str}")
+                        if parts:
+                            lines.append('- ' + ' | '.join(parts))
                     if lines:
-                        extra = (
-                            "Previous steps you have taken. "
-                            "Use them to avoid repeating work or to resume context.\n\n"
-                            + "\n\n".join(lines)
-                            + "\n"
-                        )
+                        extra = "Note: context compacted, content may be stale. Memory:\n" + "\n".join(lines) + "\n"
             except Exception:
                 pass
+
+        # Changed files from ToolCallReason
+        tool_call_reason = runtime.session.custom_data.get("tool_call_reason")
+        if isinstance(tool_call_reason, ToolCallReason) and tool_call_reason.changed_files:
+            cwd = Path.cwd()
+            if len(tool_call_reason) > 100:
+                latest = tool_call_reason.latest_path
+                if latest:
+                    tcr_md = tool_call_reason.to_markdown(paths=[latest], cwd=cwd)
+                else:
+                    tcr_md = ""
+            else:
+                tcr_md = tool_call_reason.to_markdown(cwd=cwd)
+            if tcr_md:
+                if extra:
+                    extra = extra.rstrip("\n") + "\n\n" + tcr_md + "\n"
+                else:
+                    extra = tcr_md + "\n"
+        # Todo list
+        try:
+            todos: list[dict[str, str]] = []
+            if runtime.role == "root":
+                for t in runtime.session.state.todos:
+                    todos.append({"title": t.title, "status": t.status})
+            elif runtime.subagent_store is not None and runtime.subagent_id is not None:
+                state_file = runtime.subagent_store.instance_dir(runtime.subagent_id) / "state.json"
+                if state_file.exists():
+                    data = orjson.loads(state_file.read_text(encoding="utf-8"))
+                    raw = data.get("todos", [])
+                    if isinstance(raw, list):
+                        for item in raw:
+                            if isinstance(item, dict) and "title" in item and "status" in item:
+                                todos.append(item)
+            if todos:
+                todo_lines = ["Todo:"]
+                for t in todos:
+                    status = t["status"]
+                    title = t["title"]
+                    icon = {"pending": "○", "in_progress": "◐", "done": "●"}.get(status, "○")
+                    todo_lines.append(f"- {icon} [{status}] {title}")
+                todo_md = 'Todo-List:\n' + "\n".join(todo_lines) + "\n"
+                if extra:
+                    extra = extra.rstrip("\n") + "\n\n" + todo_md
+                else:
+                    extra = todo_md
+        except Exception:
+            pass
         
         return _SYSTEM_PROMP.format(
             AGENT_ROLE=role_doc.strip(),
