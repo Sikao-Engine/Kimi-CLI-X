@@ -98,6 +98,7 @@ def get_system_prompt(
         *,
         step_mem_limit_chars: int | None = None,
         max_changed_files: int | None = None,
+        max_todos: int | None = None,
     ) -> str:
         extra = ''
         context_dir = runtime.session.dir
@@ -149,7 +150,7 @@ def get_system_prompt(
                         if parts:
                             lines.append('- ' + ' | '.join(parts))
                     if lines:
-                        extra = "Note: context compacted, content may be stale. Memory:\n" + "\n".join(lines) + "\n"
+                        extra = "Context compacted, content may be stale. Before-compact Memory:\n" + "\n".join(lines) + "\n"
             except Exception:
                 pass
 
@@ -160,11 +161,41 @@ def get_system_prompt(
             tcr_md = tool_call_reason.to_markdown(cwd=cwd, max_count=max_changed_files if max_changed_files is not None else 100)
             if tcr_md:
                 if extra:
-                    extra = extra.rstrip("\n") + "\n\n" + tcr_md + "\n"
+                    extra = extra.rstrip("\n") + "\n\nBefore-compact " + tcr_md + "\n"
                 else:
                     extra = tcr_md + "\n"
 
-
+        # Todo list
+        try:
+            todos: list[dict[str, str]] = []
+            if runtime.role == "root":
+                for t in runtime.session.state.todos:
+                    todos.append({"title": t.title, "status": t.status})
+            elif runtime.subagent_store is not None and runtime.subagent_id is not None:
+                state_file = runtime.subagent_store.instance_dir(runtime.subagent_id) / "state.json"
+                if state_file.exists():
+                    data = orjson.loads(state_file.read_text(encoding="utf-8"))
+                    raw = data.get("todos", [])
+                    if isinstance(raw, list):
+                        for item in raw:
+                            if isinstance(item, dict) and "title" in item and "status" in item:
+                                todos.append(item)
+            if todos:
+                if max_todos is not None:
+                    todos = todos[-max_todos:]
+                todo_lines = ["Todo:"]
+                for t in todos:
+                    status = t["status"]
+                    title = t["title"]
+                    icon = {"pending": "○", "in_progress": "◐", "done": "●"}.get(status, "○")
+                    todo_lines.append(f"- {icon} [{status}] {title}")
+                todo_md = 'Before-compact Todo-List:\n' + "\n".join(todo_lines) + "\n"
+                if extra:
+                    extra = extra.rstrip("\n") + "\n\n" + todo_md
+                else:
+                    extra = todo_md
+        except Exception:
+            pass
         return extra
 
     def system_prompt_func(runtime: Runtime, is_compacting: bool = False) -> str:
@@ -268,19 +299,20 @@ def get_system_prompt(
         # Attempt progressively stricter budgets until the prompt fits.
         budgets = [
             # Full everything
-            {"step_mem_limit_chars": None, "max_changed_files": None, "agent_md_mode": "full"},
+            {"step_mem_limit_chars": None, "max_changed_files": None, "agent_md_mode": "full", "max_todos": None},
             # Truncate step memory to ~4k chars (~1000 tokens)
-            {"step_mem_limit_chars": 4_000, "max_changed_files": None, "agent_md_mode": "full"},
-            # Truncate step memory to ~4k chars (~1000 tokens), Also cap changed files at 10
-            {"step_mem_limit_chars": 4_000, "max_changed_files": 50, "agent_md_mode": "drop"},
+            {"step_mem_limit_chars": 4_000, "max_changed_files": None, "agent_md_mode": "full", "max_todos": None},
+            # Truncate step memory to ~4k chars (~1000 tokens), Also cap changed files at 50
+            {"step_mem_limit_chars": 4_000, "max_changed_files": 50, "agent_md_mode": "drop", "max_todos": None},
             # Drop AGENTS.md inline entirely
-            {"step_mem_limit_chars": 2_000, "max_changed_files": 10, "agent_md_mode": "drop"},
+            {"step_mem_limit_chars": 2_000, "max_changed_files": 20, "agent_md_mode": "drop", "max_todos": 15},
         ]
         for budget in budgets:
             extra = _build_extra(
                 runtime,
                 step_mem_limit_chars=budget["step_mem_limit_chars"],
                 max_changed_files=budget["max_changed_files"],
+                max_todos=budget["max_todos"],
             )
             if budget["agent_md_mode"] == "drop":
                 agent_md_doc = 'read AGENTS.md before work\n'
