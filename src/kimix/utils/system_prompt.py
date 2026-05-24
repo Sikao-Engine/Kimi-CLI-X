@@ -96,9 +96,63 @@ def get_system_prompt(
     def _build_extra(
         runtime: Runtime,
         *,
+        step_mem_limit_chars: int | None = None,
         max_changed_files: int | None = None,
     ) -> str:
         extra = ''
+        context_dir = runtime.session.dir
+        step_mem_path = context_dir / 'steps' / f'{runtime.session.id}.json'
+        # Memory: only include when context has been compacted
+        if step_mem_path.is_file():
+            try:
+                steps = orjson.loads(step_mem_path.read_text(encoding='utf-8'))
+                if isinstance(steps, list) and steps:
+                    steps = _maybe_compact_steps(steps)
+                    if step_mem_limit_chars is not None:
+                        steps = _maybe_truncate_steps_by_tokens(steps, step_mem_limit_chars)
+                    lines: list[str] = []
+                    for s in steps:
+                        seq = s.get('seq')
+                        time = s.get('time')
+                        brief = s.get('brief')
+                        step = s.get('step')
+                        result = s.get('result')
+                        files = s.get('files', [])
+
+                        parts: list[str] = []
+                        if seq is not None:
+                            parts.append(f"**#{seq}**")
+                        if time:
+                            parts.append(f"`{time}`")
+                        if brief:
+                            parts.append(f"*{brief}*")
+                        if step:
+                            step_text = str(step).replace('\n', ' ')
+                            parts.append(f"step:{step_text}")
+                        if result:
+                            result_text = str(result).replace('\n', ' ')
+                            parts.append(f"result:{result_text}")
+                        if files:
+                            files_list = files if isinstance(files, list) else [str(files)]
+                            if work_dir is not None:
+                                wd = Path(str(work_dir)).resolve()
+                                rel_files: list[str] = []
+                                for f in files_list:
+                                    try:
+                                        rel_files.append(str(Path(f).resolve().relative_to(wd)))
+                                    except (ValueError, OSError):
+                                        rel_files.append(str(f))
+                                files_str = ', '.join(rel_files)
+                            else:
+                                files_str = ', '.join(files_list)
+                            parts.append(f"files:{files_str}")
+                        if parts:
+                            lines.append('- ' + ' | '.join(parts))
+                    if lines:
+                        extra = "Note: context compacted, content may be stale. Memory:\n" + "\n".join(lines) + "\n"
+            except Exception:
+                pass
+
         # Changed files from ToolCallReason
         tool_call_reason = runtime.session.custom_data.get("tool_call_reason")
         if isinstance(tool_call_reason, ToolCallReason) and tool_call_reason.changed_files:
@@ -201,19 +255,31 @@ def get_system_prompt(
             numbered_block = ''.join(
                 f'- {item}\n' for item in items
             )
+        # Only do system-prompt inject after compaction
+        if not is_compacting:
+            return _SYSTEM_PROMP.format(
+                AGENT_ROLE=role_doc.strip(),
+                NUMBERED=numbered_block,
+                AGENTS_MD=agent_md_doc,
+                SKILLS=skill_doc,
+                EXTRA=''
+            ).strip()
+
         # Attempt progressively stricter budgets until the prompt fits.
         budgets = [
-            # Full
-            {"max_changed_files": None, "agent_md_mode": "full"},
-            # cap changed files at 10
-            {"max_changed_files": 10, "agent_md_mode": "full"},
+            # Full everything
+            {"step_mem_limit_chars": None, "max_changed_files": None, "agent_md_mode": "full"},
+            # Truncate step memory to ~4k chars (~1000 tokens)
+            {"step_mem_limit_chars": 4_000, "max_changed_files": None, "agent_md_mode": "full"},
+            # Truncate step memory to ~4k chars (~1000 tokens), Also cap changed files at 10
+            {"step_mem_limit_chars": 4_000, "max_changed_files": 50, "agent_md_mode": "drop"},
             # Drop AGENTS.md inline entirely
-            {"max_changed_files": 10, "agent_md_mode": "drop"},
+            {"step_mem_limit_chars": 2_000, "max_changed_files": 10, "agent_md_mode": "drop"},
         ]
-
         for budget in budgets:
             extra = _build_extra(
                 runtime,
+                step_mem_limit_chars=budget["step_mem_limit_chars"],
                 max_changed_files=budget["max_changed_files"],
             )
             if budget["agent_md_mode"] == "drop":
