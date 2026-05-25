@@ -526,14 +526,34 @@ def get_skill_dirs(use_kaos_path: bool = True) -> list[Any]:
         return _default_skill_dirs
     return []
 
+generate_memory = """---
 
-generate_memory = """Summarize the session for a coding agent. Output directly; no preamble.
-1. **Project Overview**: Purpose, scope, tech stack.
-2. **Key Decisions**: Critical choices, rationale, rejected alternatives.
-3. **Current State**: What works, what's merged/verified, active branch, test results.
-4. **Important Files**: Key paths and their roles (add, modify, delete).
-5. **Architecture / Data Flow**: Major components, interfaces, schema changes.
-6. **Dependencies**: Added, removed, upgraded packages or services.
-7. **TODOs / Blockers**: Remaining tasks, known issues, external dependencies.
-8. **Risks / Rollback**: Breaking changes, migration steps, revert strategy.
-9. **Technical Notes**: Patterns, constraints, APIs, env setup, performance or security considerations."""
+Compact the above agent conversation context according to the following priorities and rules.
+
+**Priorities:**
+- **Current Task State** — what is being worked on right now
+- **Errors & Solutions** — all errors encountered and how they were resolved
+- **Code Evolution** — final working versions only (drop intermediate attempts)
+- **System Context** — project structure, dependencies, environment setup
+- **Design Decisions** — architectural choices and rationale
+- **TODO Items** — unfinished tasks and known issues
+- **Project Overview** — purpose, scope, tech stack
+- **Key Decisions** — critical choices, rationale, rejected alternatives
+- **Current State** — what works, what's merged/verified, active branch, test results
+- **Important Files** — key paths and their roles (add, modify, delete)
+- **Architecture / Data Flow** — major components, interfaces, schema changes
+- **Dependencies** — added, removed, upgraded packages or services
+- **Risks / Rollback** — breaking changes, migration steps, revert strategy
+- **Technical Notes** — patterns, constraints, APIs, env setup, performance or security considerations
+
+**Rules:**
+- **Keep:** error messages, stack traces, working solutions, current task
+- **Merge:** similar discussions into single summary points
+- **Remove:** redundant explanations, failed attempts (retain lessons learned), verbose comments
+- **Condense:** long code blocks → signatures + key logic only
+
+**Special Handling:**
+- **Code:** keep full version if < 20 lines; otherwise keep signature + key logic
+- **Errors:** keep full error message + final solution
+- **Discussions:** extract decisions and action items only
+```"""
