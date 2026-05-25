@@ -149,23 +149,21 @@ class PrintStream:
         self._print_func = print_func
         self._last_char_was_newline = True
         self._state = StreamPrintState.Other
-        self._lock = threading.Lock()
 
     def print_word(self, word: str, require_new_line: bool) -> None:
         """Print a word, auto-inserting a leading newline when the previous
         output didn't end with one."""
-        with self._lock:
-            if not word:
-                if require_new_line and not self._last_char_was_newline:
-                    self._print_func('', end='\n')
-                    self._last_char_was_newline = True
-                return
-
+        if not word:
             if require_new_line and not self._last_char_was_newline:
                 self._print_func('', end='\n')
+                self._last_char_was_newline = True
+            return
 
-            self._print_func(word, end='')
-            self._last_char_was_newline = word.endswith('\n')
+        if require_new_line and not self._last_char_was_newline:
+            self._print_func('', end='\n')
+
+        self._print_func(word, end='')
+        self._last_char_was_newline = word.endswith('\n')
 
     def colorful_print_word(
         self, word: str,
@@ -276,8 +274,7 @@ def _format_tool_result(result: ToolResult) -> str:
     """Format a ToolResult for the output function."""
     rv = result.return_value
     return rv.message or ""
-
-def print_agent_json(
+def _print_agent_json(
     wire_msg: Any, output_function: Callable[[str, MessageType], Any] | None = None
 ) -> None:
     if isinstance(wire_msg, _TOOL_TYPES):
@@ -338,7 +335,12 @@ def print_agent_json(
         return
     else:
         _stream._state = StreamPrintState.Other
-
+print_lock = threading.Lock()
+def print_agent_json(
+    wire_msg: Any, output_function: Callable[[str, MessageType], Any] | None = None
+) -> None:
+    with print_lock:
+        _print_agent_json(wire_msg, output_function)
 
 def run_thread(
     function: Callable[..., Any], args: tuple[Any, ...] | None = None
