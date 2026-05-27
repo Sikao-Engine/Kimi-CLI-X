@@ -234,17 +234,6 @@ class KimiToolset:
 
             # Same-step dedup: wait for the original task and copy its result
             if call_key in self._current_step_tasks:
-                from kimi_cli.telemetry import track
-
-                track(
-                    "tool_call_dedup_detected",
-                    session_id=_get_session_id(),
-                    turn_id=self._turn_id,
-                    step_no=self._step_no,
-                    tool_name=tool_call.function.name,
-                    dup_type="same_step",
-                    args_hash=hashlib.sha256(call_key[1].encode()).hexdigest()[:8],
-                )
                 original_task = self._current_step_tasks[call_key]
 
                 async def _await_dup() -> ToolResult:
@@ -258,17 +247,6 @@ class KimiToolset:
 
             is_cross_step_dup = call_key in self._previous_step_calls
             if is_cross_step_dup:
-                from kimi_cli.telemetry import track
-
-                track(
-                    "tool_call_dedup_detected",
-                    session_id=_get_session_id(),
-                    turn_id=self._turn_id,
-                    step_no=self._step_no,
-                    tool_name=tool_call.function.name,
-                    dup_type="cross_step",
-                    args_hash=hashlib.sha256(call_key[1].encode()).hexdigest()[:8],
-                )
                 self._dedup_triggered = True
 
             if tool_call.function.name not in self._tool_dict:
@@ -430,16 +408,6 @@ class KimiToolset:
                     _hook_task.add_done_callback(
                         lambda t: t.exception() if not t.cancelled() else None
                     )
-                    from kimi_cli.telemetry import track
-
-                    _error_type = type(e).__name__
-                    track(
-                        "tool_call",
-                        tool_name=tool_call.function.name,
-                        outcome="error",
-                        duration_ms=int(tool_elapsed * 1000),
-                        error_type=_error_type,
-                    )
                     return ToolResult(
                         tool_call_id=tool_call.id,
                         return_value=ToolRuntimeError(str(e)),
@@ -459,26 +427,6 @@ class KimiToolset:
                     elapsed=tool_elapsed,
                     call_id=tool_call.id,
                 )
-                from kimi_cli.telemetry import track as _track_tool_call
-
-                if isinstance(ret, ToolError):
-                    _track_tool_call(
-                        "tool_call",
-                        tool_name=tool_call.function.name,
-                        outcome="error",
-                        duration_ms=int(tool_elapsed * 1000),
-                        error_type=type(ret).__name__,
-                        dup_type="cross_step" if is_cross_step_dup else "normal",
-                    )
-                else:
-                    _track_tool_call(
-                        "tool_call",
-                        tool_name=tool_call.function.name,
-                        outcome="success",
-                        duration_ms=int(tool_elapsed * 1000),
-                        dup_type="cross_step" if is_cross_step_dup else "normal",
-                    )
-
                 # --- PostToolUse (fire-and-forget) ---
                 _hook_task = asyncio.create_task(
                     self._hook_engine.trigger(

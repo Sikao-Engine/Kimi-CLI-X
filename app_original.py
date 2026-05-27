@@ -15,7 +15,7 @@ from kaos.path import KaosPath
 from pydantic import SecretStr
 
 from kimi_cli.agentspec import DEFAULT_AGENT_FILE
-from kimi_cli.auth.oauth import KIMI_CODE_OAUTH_KEY, OAuthManager, get_device_id
+from kimi_cli.auth.oauth import OAuthManager
 from kimi_cli.background.models import is_terminal_status
 from kimi_cli.cli import InputFormat, OutputFormat
 from kimi_cli.config import Config, LLMModel, LLMProvider, load_config
@@ -188,15 +188,10 @@ class KimiCLI:
             MCPRuntimeError(KimiCLIException, RuntimeError): When any MCP server cannot be
                 connected.
         """
-        _create_t0 = time.monotonic()
-        _phase_timings_ms: dict[str, int] = {}
-
         if startup_progress is not None:
             startup_progress("Loading configuration...")
 
-        _phase_t = time.monotonic()
         config = config if isinstance(config, Config) else load_config(config)
-        _phase_timings_ms["config_ms"] = int((time.monotonic() - _phase_t) * 1000)
         if max_steps_per_turn is not None:
             config.loop_control.max_steps_per_turn = max_steps_per_turn
         if max_retries_per_step is not None:
@@ -205,7 +200,6 @@ class KimiCLI:
             config.loop_control.max_ralph_iterations = max_ralph_iterations
         logger.info("Loaded config: {config}", config=config)
 
-        _phase_t = time.monotonic()
         oauth = OAuthManager(config)
 
         bg_refresh_task = asyncio.create_task(_refresh_managed_models_silent(config))
@@ -285,7 +279,6 @@ class KimiCLI:
         runtime.notifications.recover()
         runtime.background_tasks.reconcile()
         _cleanup_stale_foreground_subagents(runtime)
-        _phase_timings_ms["init_ms"] = int((time.monotonic() - _phase_t) * 1000)
 
         # Refresh plugin configs with fresh credentials (e.g. OAuth tokens)
         try:
@@ -306,7 +299,6 @@ class KimiCLI:
         if startup_progress is not None:
             startup_progress("Loading agent...")
 
-        _phase_t = time.monotonic()
         agent = await load_agent(
             agent_file,
             runtime,
@@ -314,7 +306,6 @@ class KimiCLI:
             start_mcp_loading=not defer_mcp_loading,
             **load_agent_custom_arguments,
         )
-        _phase_timings_ms["mcp_ms"] = int((time.monotonic() - _phase_t) * 1000)
 
         if startup_progress is not None:
             startup_progress("Restoring conversation...")
@@ -341,54 +332,6 @@ class KimiCLI:
         hook_engine = HookEngine(config.hooks, cwd=str(session.work_dir))
         soul.set_hook_engine(hook_engine)
         runtime.hook_engine = hook_engine
-
-        # --- Initialize telemetry ---
-        from kimi_cli.telemetry import attach_sink, set_context
-        from kimi_cli.telemetry import disable as disable_telemetry
-
-        telemetry_disabled = not config.telemetry or get_env_bool("KIMI_DISABLE_TELEMETRY")
-        if telemetry_disabled:
-            disable_telemetry()
-        else:
-            device_id = get_device_id()
-            set_context(device_id=device_id, session_id=session.id)
-            from kimi_cli.telemetry.sink import EventSink
-            from kimi_cli.telemetry.transport import AsyncTransport
-
-            def _get_token() -> str | None:
-                return oauth.get_cached_access_token(KIMI_CODE_OAUTH_KEY)
-
-            transport = AsyncTransport(device_id=device_id, get_access_token=_get_token)
-            sink = EventSink(
-                transport,
-                version=VERSION,
-                model=model.model if model else "",
-                ui_mode=ui_mode,
-            )
-            attach_sink(sink)
-
-        from kimi_cli.telemetry import track, track_session_started_once
-        from kimi_cli.telemetry.crash import install_asyncio_handler, set_phase
-
-        # App init finished — enter runtime phase and hook asyncio crashes.
-        install_asyncio_handler()
-        set_phase("runtime")
-
-        if ui_mode != "wire":
-            track_session_started_once(ui_mode=ui_mode, resumed=resumed)
-        track(
-            "started",
-            resumed=resumed,
-            yolo=runtime.approval.is_yolo(),
-            afk=runtime.approval.is_afk(),
-        )
-        track(
-            "startup_perf",
-            duration_ms=int((time.monotonic() - _create_t0) * 1000),
-            config_ms=_phase_timings_ms.get("config_ms", 0),
-            init_ms=_phase_timings_ms.get("init_ms", 0),
-            mcp_ms=_phase_timings_ms.get("mcp_ms", 0),
-        )
 
         return KimiCLI(soul, runtime, env_overrides, bg_refresh_task)
 
