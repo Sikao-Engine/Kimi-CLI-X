@@ -1,0 +1,1 @@
+Read image/video up to ${MAX_MEDIA_MEGABYTES}MB. {% if "image_in" in capabilities and "video_in" in capabilities %}Supports images and videos.{% elif "image_in" in capabilities %}Images only.{% elif "video_in" in capabilities %}Videos only.{% else %}Not supported.{% endif %}

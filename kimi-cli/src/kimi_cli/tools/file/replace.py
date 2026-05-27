@@ -1,0 +1,425 @@
+import asyncio
+from collections.abc import Callable
+from pathlib import Path
+from stat import S_ISREG
+from typing import override
+
+import json_repair
+from rapidfuzz import fuzz, process
+
+from kaos.path import KaosPath
+from kosong.tooling import CallableTool2, ToolError, ToolReturnValue
+from pydantic import BaseModel, Field
+
+from kimi_cli.session import Session
+from kimi_cli.soul.agent import Runtime
+from kimi_cli.soul.approval import Approval
+from kimi_cli.tools.display import DisplayBlock
+from kimi_cli.tools.file import FileActions
+from kimi_cli.tools.reason import ToolCallReason
+from kimi_cli.tools.file.check_fmt import check_json_text, check_toml_text, check_xml_text, check_yaml_text
+from kimi_cli.tools.file.plan_mode import inspect_plan_edit_target
+from kimi_cli.tools.utils import load_desc
+from kimi_cli.utils.diff import build_diff_blocks
+from kimi_cli.utils.logging import logger
+from kimi_cli.utils.path import is_within_directory, is_within_workspace, kaos_path_from_user_input
+from kimi_cli.vfs import VFS
+from .utils import resolve_vfs
+
+_BASE_DESCRIPTION = "Replace strings in text files."
+
+
+class Edit(BaseModel):
+    old: str = Field(description="String to replace.")
+    new: str = Field(description="Replacement string.")
+    replace_all: bool = Field(description="Replace all occurrences.", default=False)
+
+
+class Params(BaseModel):
+    path: str = Field(
+        description="File path. Absolute path required outside working directory."
+    )
+    edit: Edit | list[Edit] = Field(
+        description="One or more edits."
+    )
+    reason: str = Field(
+        default="",
+        description="Reason to call this tool.",
+    )
+
+
+class EditFile(CallableTool2[Params]):
+    name: str = "EditFile"
+    description: str = _BASE_DESCRIPTION
+    params: type[Params] = Params
+
+    def __init__(self, runtime: Runtime, approval: Approval, session: Session, vfs: VFS | None = None):
+        super().__init__()
+        self._work_dir = runtime.builtin_args.KIMI_WORK_DIR
+        self._additional_dirs = runtime.additional_dirs
+        self._approval = approval
+        self._session = session
+        self._vfs = vfs
+        self._plan_mode_checker: Callable[[], bool] | None = None
+        self._plan_file_path_getter: Callable[[], Path | None] | None = None
+
+    def bind_plan_mode(
+        self, checker: Callable[[], bool], path_getter: Callable[[], Path | None]
+    ) -> None:
+        """Bind plan mode state checker and plan file path getter."""
+        self._plan_mode_checker = checker
+        self._plan_file_path_getter = path_getter
+
+    async def _validate_path(self, path: KaosPath) -> tuple[ToolError | None, bool]:
+        """Validate that the path is safe to edit.
+
+        Returns:
+            A tuple of (error_or_none, is_inside_workspace).
+        """
+        resolved_path = path.canonical()
+
+        inside = is_within_workspace(resolved_path, self._work_dir, self._additional_dirs)
+        if not inside and not path.is_absolute():
+            return (
+                ToolError(
+                    message=(
+                        f"`{path}` is not an absolute path. "
+                        "You must provide an absolute path to edit a file "
+                        "outside the working directory."
+                    ),
+                    brief="Invalid path",
+                ),
+                False,
+            )
+        protected_paths = self._session.custom_config.get("config_json", {}).get("protected_write_paths")
+        if protected_paths:
+            from .utils import check_path_protected
+            if matched := check_path_protected(resolved_path, protected_paths, self._work_dir):
+                return (
+                    ToolError(
+                        message=f"Editing `{path}` is blocked by protected path rule: `{matched}`.",
+                        brief="Protected path",
+                    ),
+                    False,
+                )
+        return None, inside
+
+    def _normalize_line_endings(self, text: str) -> str:
+        """Normalize \\r\\n to \\n for comparison."""
+        return text.replace("\r\n", "\n")
+
+    def _find_similar(self, target: str, content: str, cutoff: float = 75.0) -> str | None:
+        """Find the most similar line or chunk in content to target."""
+        norm_target = self._normalize_line_endings(target)
+        norm_content = self._normalize_line_endings(content)
+        lines = norm_content.splitlines()
+
+        # Try line-level matching first
+        result = process.extractOne(norm_target, lines, scorer=fuzz.ratio)
+        if result and result[1] >= cutoff:
+            return result[0]
+
+        # Fallback: sliding windows of similar line count for multi-line targets
+        target_lines = norm_target.splitlines()
+        target_line_count = len(target_lines)
+        if target_line_count > 1 and len(lines) >= target_line_count:
+            windows = []
+            for i in range(len(lines) - target_line_count + 1):
+                window = "\n".join(lines[i : i + target_line_count])
+                windows.append(window)
+            if windows:
+                result = process.extractOne(norm_target, windows, scorer=fuzz.ratio)
+                if result and result[1] >= cutoff:
+                    return result[0]
+
+        # Fallback: single-line targets, try all lines even if length differs
+        if target_line_count == 1 and lines:
+            result = process.extractOne(norm_target, lines, scorer=fuzz.ratio)
+            if result and result[1] >= cutoff:
+                return result[0]
+
+        return None
+
+    def _try_strip_match(
+        self, content: str, old: str, new: str
+    ) -> str | None:
+        """Try to find *old* inside any line of *content* ignoring leading/trailing whitespace.
+
+        Returns the updated content with the first such occurrence replaced, or None.
+        """
+        old_stripped = old.strip()
+        if not old_stripped:
+            return None
+
+        # Search line-by-line so we can map back to the original line text
+        for line in content.splitlines(keepends=True):
+            line_core = line.rstrip("\n").rstrip("\r")
+            idx = line_core.find(old_stripped)
+            if idx != -1:
+                # Rebuild the line: preserve prefix/suffix whitespace around the match
+                prefix = line_core[:idx]
+                suffix = line_core[idx + len(old_stripped) :]
+                # Keep original line ending
+                ending = ""
+                if line.endswith("\r\n"):
+                    ending = "\r\n"
+                elif line.endswith("\n"):
+                    ending = "\n"
+                elif line.endswith("\r"):
+                    ending = "\r"
+                new_line = prefix + new + suffix + ending
+                # Replace only the first occurrence of this exact line in content
+                return content.replace(line, new_line, 1)
+        return None
+
+    def _find_best_fuzzy_match(
+        self, target: str, content: str, cutoff: float = 75.0
+    ) -> tuple[str, float] | None:
+        """Find the best fuzzy match of target in content.
+
+        Returns the matched original text and similarity score, or None.
+        """
+        norm_target = self._normalize_line_endings(target)
+        norm_content = self._normalize_line_endings(content)
+
+        best_score = 0.0
+        best_original = None
+
+        target_lines = norm_target.splitlines()
+        target_line_count = len(target_lines)
+
+        # Split original content into lines (without line endings)
+        original_lines = content.splitlines()
+        norm_lines = norm_content.splitlines()
+
+        if target_line_count == 1:
+            for orig_line, norm_line in zip(original_lines, norm_lines):
+                score = fuzz.ratio(norm_target, norm_line)
+                if score > best_score:
+                    best_score = score
+                    best_original = orig_line
+        else:
+            for i in range(len(norm_lines) - target_line_count + 1):
+                window = "\n".join(norm_lines[i : i + target_line_count])
+                score = fuzz.ratio(norm_target, window)
+                if score > best_score:
+                    best_score = score
+                    best_original = "\n".join(
+                        original_lines[i : i + target_line_count]
+                    )
+
+        if best_score >= cutoff:
+            return best_original, best_score
+
+        return None
+
+    def _apply_edit(self, content: str, edit: Edit) -> tuple[str, int, str | None]:
+        """Apply a single edit to the content.
+
+        Returns (new_content, replacements_made, suggestion_or_None).
+        """
+        if not edit.old or edit.old == edit.new:
+            return content, 0, None
+
+        norm_content = self._normalize_line_endings(content)
+        norm_old = self._normalize_line_endings(edit.old)
+        norm_new = self._normalize_line_endings(edit.new)
+
+        if edit.replace_all:
+            count = norm_content.count(norm_old)
+            if count == 0:
+                suggestion = self._find_similar(edit.old, content)
+                return content, 0, suggestion
+            return norm_content.replace(norm_old, norm_new), count, None
+
+        # Single replacement with normalized line endings
+        idx = norm_content.find(norm_old)
+        if idx != -1:
+            return norm_content.replace(norm_old, norm_new, 1), 1, None
+
+        # Exact match failed — try strip match (ignores leading/trailing spaces)
+        stripped = self._try_strip_match(content, edit.old, edit.new)
+        if stripped is not None:
+            return stripped, 1, None
+
+        # Strip match failed — try fuzzy match
+        fuzzy = self._find_best_fuzzy_match(edit.old, content)
+        if fuzzy is not None:
+            matched_text, score = fuzzy
+            # Replace in normalized content so line endings stay consistent
+            new_content = norm_content.replace(
+                self._normalize_line_endings(matched_text), norm_new, 1
+            )
+            return new_content, 1, None
+
+        # No match at all — return suggestion for error message
+        suggestion = self._find_similar(edit.old, content)
+        return content, 0, suggestion
+
+    @override
+    async def __call__(self, params: Params) -> ToolReturnValue:
+        tool_call_reason = self._session.custom_data.get("tool_call_reason")
+        if isinstance(tool_call_reason, ToolCallReason):
+            tool_call_reason.add_tool_call_reason(params, self)
+
+        if not params.path:
+            return ToolError(
+                message="File path cannot be empty.",
+                brief="Empty file path",
+            )
+
+        try:
+            p = kaos_path_from_user_input(params.path)
+            logical_path = p
+            _outside = not is_within_directory(logical_path.canonical(), self._work_dir)
+            err, _ = await self._validate_path(p)
+            if err:
+                if _outside:
+                    err.message = f"[out of work-dir] {err.message}"
+                return err
+
+            p = await resolve_vfs(params.path, self._vfs, for_write=True)
+
+            plan_target = inspect_plan_edit_target(
+                logical_path,
+                plan_mode_checker=self._plan_mode_checker,
+                plan_file_path_getter=self._plan_file_path_getter,
+            )
+            if isinstance(plan_target, ToolError):
+                if _outside:
+                    plan_target.message = f"[out of work-dir] {plan_target.message}"
+                return plan_target
+
+            is_plan_file_edit = plan_target.is_plan_target
+
+            try:
+                st = await p.stat()
+                if not S_ISREG(st.st_mode):
+                    return ToolError(
+                        message=f"{'[out of work-dir] ' if _outside else ''}`{logical_path}` is not a file.",
+                        brief="Invalid path",
+                    )
+            except FileNotFoundError:
+                if is_plan_file_edit:
+                    return ToolError(
+                        message=(
+                            f"{'[out of work-dir] ' if _outside else ''}"
+                            "The current plan file does not exist yet. "
+                            "Use WriteFile to create it before calling EditFile."
+                        ),
+                        brief="Plan file not created",
+                    )
+                return ToolError(
+                    message=f"{'[out of work-dir] ' if _outside else ''}`{logical_path}` does not exist.",
+                    brief="File not found",
+                )
+
+            # Read the file content
+            content = await p.read_text(errors="replace")
+
+            original_content = content
+            edits = [params.edit] if isinstance(params.edit, Edit) else params.edit
+
+            def _work() -> tuple[str, int, str | None]:
+                text = content
+                total = 0
+                last_suggestion = None
+                for edit in edits:
+                    text, n, suggestion = self._apply_edit(text, edit)
+                    total += n
+                    if suggestion:
+                        last_suggestion = suggestion
+                return text, total, last_suggestion
+
+            new_content, total_replacements, suggestion = await asyncio.to_thread(_work)
+
+            # Check if any changes were made
+            if new_content == original_content:
+                msg = f"{'[out of work-dir] ' if _outside else ''}No replacements were made. The old string was not found in the file."
+                if suggestion:
+                    msg += f"\n\nDid you mean:\n  {suggestion}"
+                return ToolError(
+                    message=msg,
+                    brief="No replacements made",
+                )
+
+            diff_blocks: list[DisplayBlock] = await build_diff_blocks(
+                str(logical_path), original_content, new_content
+            )
+
+            action = (
+                FileActions.EDIT
+                if is_within_workspace(p, self._work_dir, self._additional_dirs)
+                else FileActions.EDIT_OUTSIDE
+            )
+
+            # Plan file edits are auto-approved; all other edits need approval.
+            if not is_plan_file_edit:
+                result = await self._approval.request(
+                    self.name,
+                    action,
+                    f"Edit file `{logical_path}`",
+                    display=diff_blocks,
+                )
+                if not result:
+                    return result.rejection_error()
+
+            # Fix JSON format before writing if needed
+            file_path_str = str(logical_path)
+            fmt_error = None
+            suffix = Path(file_path_str).suffix.lower()
+            is_json = suffix == ".json"
+            if is_json:
+                fmt_error = check_json_text(new_content)
+            elif suffix in (".yaml", ".yml"):
+                fmt_error = check_yaml_text(new_content)
+            elif suffix == ".toml":
+                fmt_error = check_toml_text(new_content)
+            elif suffix == ".xml":
+                fmt_error = check_xml_text(new_content)
+
+            # Try to repair broken JSON before writing
+            if is_json and fmt_error:
+                try:
+                    repaired_text = json_repair.repair_json(new_content, return_objects=False)
+                    if repaired_text:
+                        new_content = repaired_text
+                        fmt_error = None
+                        diff_blocks = await build_diff_blocks(
+                            str(logical_path), original_content, new_content
+                        )
+                except Exception:
+                    pass
+
+            # Write the modified content back to the file
+            await p.write_text(new_content, errors="replace")
+
+            if fmt_error:
+                return ToolError(
+                    message=f"{'[out of work-dir] ' if _outside else ''}File successfully edited, but {fmt_error}",
+                    brief="Format validation failed",
+                )
+
+            return ToolReturnValue(
+                is_error=False,
+                output="",
+                message=(
+                    f"{'[out of work-dir] ' if _outside else ''}File successfully edited. "
+                    f"Applied {len(edits)} edit(s) with {total_replacements} total replacement(s)."
+                ),
+                display=diff_blocks,
+            )
+
+        except (OSError, ValueError, RuntimeError) as e:
+            logger.warning("EditFile failed: {path}: {error}", path=params.path, error=e)
+            _outside_ex = False
+            try:
+                _outside_ex = not is_within_directory(kaos_path_from_user_input(params.path).canonical(), self._work_dir)
+            except Exception:
+                pass
+            return ToolError(
+                message=f"{'[out of work-dir] ' if _outside_ex else ''}Failed to edit. Error: {e}",
+                brief="Failed to edit file",
+            )
+        except MemoryError:
+            raise

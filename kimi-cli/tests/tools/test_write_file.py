@@ -1,0 +1,332 @@
+"""Tests for the write_file tool."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, cast
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from kaos.path import KaosPath
+from pydantic import ValidationError
+
+from kimi_cli.soul.agent import Runtime
+from kimi_cli.soul.approval import Approval, ApprovalResult
+from kimi_cli.tools.file.write import Params, WriteFile
+from kimi_cli.wire.types import DiffDisplayBlock
+from tests.conftest import tool_call_context
+
+
+async def test_write_new_file(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test writing a new file."""
+    file_path = temp_work_dir / "new_file.txt"
+    content = "Hello, World!"
+
+    result = await write_file_tool(Params(path=str(file_path), content=content))
+
+    assert not result.is_error
+    assert "successfully overwritten" in result.message
+    diff_block = next(block for block in result.display if block.type == "diff")
+    assert isinstance(diff_block, DiffDisplayBlock)
+    assert diff_block.path == str(file_path)
+    assert diff_block.old_text == ""
+    assert diff_block.new_text == content
+    assert await file_path.exists()
+    assert await file_path.read_text() == content
+
+
+async def test_overwrite_existing_file(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test overwriting an existing file."""
+    file_path = temp_work_dir / "existing.txt"
+    original_content = "Original content"
+    await file_path.write_text(original_content)
+
+    new_content = "New content"
+    result = await write_file_tool(Params(path=str(file_path), content=new_content))
+
+    assert not result.is_error
+    assert "successfully overwritten" in result.message
+    assert await file_path.read_text() == new_content
+
+
+async def test_append_to_file(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test appending to an existing file."""
+    file_path = temp_work_dir / "append_test.txt"
+    original_content = "First line\n"
+    await file_path.write_text(original_content)
+
+    append_content = "Second line\n"
+    result = await write_file_tool(
+        Params(path=str(file_path), content=append_content, mode="append")
+    )
+
+    assert not result.is_error
+    assert "successfully appended to" in result.message
+    expected_content = original_content + append_content
+    assert await file_path.read_text() == expected_content
+
+
+async def test_write_unicode_content(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test writing unicode content."""
+    file_path = temp_work_dir / "unicode.txt"
+    content = "Hello 世界 🌍\nUnicode: café, naïve, résumé"
+
+    result = await write_file_tool(Params(path=str(file_path), content=content))
+
+    assert not result.is_error
+    assert await file_path.exists()
+    assert await file_path.read_text(encoding="utf-8") == content
+
+
+async def test_write_empty_content(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test writing empty content."""
+    file_path = temp_work_dir / "empty.txt"
+    content = ""
+
+    result = await write_file_tool(Params(path=str(file_path), content=content))
+
+    assert not result.is_error
+    assert await file_path.exists()
+    assert await file_path.read_text() == content
+
+
+async def test_write_multiline_content(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test writing multiline content."""
+    file_path = temp_work_dir / "multiline.txt"
+    content = "Line 1\nLine 2\nLine 3\n"
+
+    result = await write_file_tool(Params(path=str(file_path), content=content))
+
+    assert not result.is_error
+    assert await file_path.read_text() == content
+
+
+async def test_write_with_relative_path(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test writing with a relative path inside the work directory."""
+    relative_dir = temp_work_dir / "relative" / "path"
+    await relative_dir.mkdir(parents=True, exist_ok=True)
+
+    result = await write_file_tool(Params(path="relative/path/file.txt", content="content"))
+
+    assert not result.is_error
+    assert await (temp_work_dir / "relative" / "path" / "file.txt").read_text() == "content"
+
+
+async def test_write_outside_work_directory(write_file_tool: WriteFile, outside_file: Path):
+    """Test writing outside the working directory with an absolute path."""
+    result = await write_file_tool(Params(path=str(outside_file), content="content"))
+
+    assert not result.is_error
+    assert outside_file.read_text() == "content"
+
+
+async def test_write_outside_work_directory_with_prefix(
+    write_file_tool: WriteFile, temp_work_dir: KaosPath
+):
+    """Paths sharing the same prefix as work dir should still be writable with absolute paths."""
+    base = Path(str(temp_work_dir))
+    sneaky_dir = base.parent / f"{base.name}-sneaky"
+    sneaky_dir.mkdir(parents=True, exist_ok=True)
+    sneaky_file = sneaky_dir / "file.txt"
+
+    result = await write_file_tool(Params(path=str(sneaky_file), content="content"))
+
+    assert not result.is_error
+    assert sneaky_file.read_text() == "content"
+
+
+async def test_write_to_nonexistent_directory(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test writing to a non-existent directory auto-creates parents."""
+    file_path = temp_work_dir / "nonexistent" / "file.txt"
+
+    result = await write_file_tool(Params(path=str(file_path), content="content"))
+
+    assert not result.is_error
+    assert await file_path.exists()
+    assert await file_path.read_text() == "content"
+
+
+async def test_write_with_invalid_mode(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test writing with an invalid mode."""
+    file_path = temp_work_dir / "test.txt"
+
+    with pytest.raises(ValidationError):
+        await write_file_tool(Params(path=str(file_path), content="content", mode="invalid"))  # type: ignore[reportArgumentType]
+
+
+async def test_append_to_nonexistent_file(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test appending to a non-existent file (should create it)."""
+    file_path = temp_work_dir / "new_append.txt"
+    content = "New content\n"
+
+    result = await write_file_tool(Params(path=str(file_path), content=content, mode="append"))
+
+    assert not result.is_error
+    assert "successfully appended to" in result.message
+    assert await file_path.exists()
+    assert await file_path.read_text() == content
+
+
+async def test_write_large_content(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test writing large content."""
+    file_path = temp_work_dir / "large.txt"
+    content = "Large content line\n" * 1000
+
+    result = await write_file_tool(Params(path=str(file_path), content=content))
+
+    assert not result.is_error
+    assert await file_path.exists()
+    assert await file_path.read_text() == content
+
+
+# --- Comprehensive edge-case tests ---
+
+
+async def test_write_empty_path(write_file_tool: WriteFile):
+    """Test writing with an empty path."""
+    result = await write_file_tool(Params(path="", content="content"))
+    assert result.is_error
+    assert "File path cannot be empty" in result.message
+
+
+async def test_write_relative_path_outside_workspace(
+    write_file_tool: WriteFile, temp_work_dir: KaosPath
+):
+    """Test writing with a relative path that resolves outside the workspace."""
+    result = await write_file_tool(Params(path="../outside.txt", content="content"))
+    assert result.is_error
+    assert "absolute path" in result.message.lower()
+
+
+async def test_write_to_directory(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test writing to an existing directory path."""
+    dir_path = temp_work_dir / "subdir"
+    await dir_path.mkdir()
+
+    result = await write_file_tool(Params(path=str(dir_path), content="content"))
+    assert result.is_error
+    assert "is a directory" in result.message
+
+
+async def test_write_valid_json(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test writing valid JSON content succeeds."""
+    file_path = temp_work_dir / "test.json"
+    content = '{"key": "value", "num": 42}'
+
+    result = await write_file_tool(Params(path=str(file_path), content=content))
+    assert not result.is_error
+    assert await file_path.read_text() == content
+
+
+async def test_write_invalid_json(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test writing invalid JSON content returns a format validation error."""
+    file_path = temp_work_dir / "test.json"
+    content = '{"key": broken}'
+
+    with patch("kimi_cli.tools.file.write.json_repair.repair_json", return_value=""):
+        result = await write_file_tool(Params(path=str(file_path), content=content))
+    assert result.is_error
+    assert "Format validation failed" in result.brief
+    assert "JSON decode error" in result.message
+
+
+async def test_write_valid_xml(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test writing valid XML content succeeds."""
+    file_path = temp_work_dir / "test.xml"
+    content = "<root><item>value</item></root>"
+
+    result = await write_file_tool(Params(path=str(file_path), content=content))
+    assert not result.is_error
+    assert await file_path.read_text() == content
+
+
+async def test_write_invalid_xml(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Test writing invalid XML content returns a format validation error."""
+    file_path = temp_work_dir / "test.xml"
+    content = "<root><unclosed></root>"
+
+    result = await write_file_tool(Params(path=str(file_path), content=content))
+    assert result.is_error
+    assert "Format validation failed" in result.brief
+    assert "XML parse error" in result.message
+
+
+async def test_write_approval_rejected(runtime: Runtime, session, temp_work_dir: KaosPath):
+    """Test that a rejected approval returns a ToolRejectedError."""
+    file_path = temp_work_dir / "test.txt"
+
+    approval = Approval(yolo=False)
+    request_mock = AsyncMock(return_value=ApprovalResult(approved=False))
+    approval.request = cast(Any, request_mock)
+
+    with tool_call_context("WriteFile"):
+        tool = WriteFile(runtime, approval, session)
+        result = await tool(Params(path=str(file_path), content="content"))
+
+    assert result.is_error
+    assert "rejected" in result.message.lower()
+    request_mock.assert_awaited_once()
+
+
+async def test_write_bind_plan_mode(runtime: Runtime, session, temp_work_dir: KaosPath):
+    """Test bind_plan_mode sets checker and getter correctly."""
+    with tool_call_context("WriteFile"):
+        tool = WriteFile(runtime, Approval(yolo=True), session)
+        checker = lambda: False
+        getter = lambda: None
+        tool.bind_plan_mode(checker, getter)
+        assert tool._plan_mode_checker is checker
+        assert tool._plan_file_path_getter is getter
+
+
+async def test_write_exception_during_write(runtime: Runtime, session, temp_work_dir: KaosPath):
+    """Test that an exception during write is handled gracefully."""
+    file_path = temp_work_dir / "test.txt"
+
+    with tool_call_context("WriteFile"):
+        tool = WriteFile(runtime, Approval(yolo=True), session)
+        with patch("kaos.path.KaosPath.write_text", side_effect=OSError("disk full")):
+            result = await tool(Params(path=str(file_path), content="content"))
+
+    assert result.is_error
+    assert "Failed to write" in result.message
+    assert "disk full" in result.message
+
+
+# --- [out of work-dir] warning tests ---
+
+
+async def test_write_outside_work_dir_has_warning(write_file_tool: WriteFile, outside_file: Path):
+    """Writing outside work-dir should include [out of work-dir] in success message."""
+    result = await write_file_tool(Params(path=str(outside_file), content="content"))
+    assert not result.is_error
+    assert "[out of work-dir]" in result.message
+
+
+async def test_write_inside_work_dir_no_warning(write_file_tool: WriteFile, temp_work_dir: KaosPath):
+    """Writing inside work-dir should NOT include [out of work-dir] in message."""
+    file_path = temp_work_dir / "inside.txt"
+    result = await write_file_tool(Params(path=str(file_path), content="content"))
+    assert not result.is_error
+    assert "[out of work-dir]" not in result.message
+
+
+async def test_write_outside_work_dir_error_has_warning(
+    write_file_tool: WriteFile, outside_file: Path
+):
+    """Error writing outside work-dir should include [out of work-dir] in error message."""
+    # Make outside_file a directory to trigger an error
+    outside_dir = outside_file.parent / "outside_dir"
+    outside_dir.mkdir(parents=True, exist_ok=True)
+    result = await write_file_tool(Params(path=str(outside_dir), content="content"))
+    assert result.is_error
+    assert "[out of work-dir]" in result.message
+
+
+async def test_write_outside_relative_path_error_has_warning(
+    write_file_tool: WriteFile, temp_work_dir: KaosPath
+):
+    """Relative path outside workspace error should include [out of work-dir]."""
+    result = await write_file_tool(Params(path="../outside.txt", content="content"))
+    assert result.is_error
+    assert "[out of work-dir]" in result.message

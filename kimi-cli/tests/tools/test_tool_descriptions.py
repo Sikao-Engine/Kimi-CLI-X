@@ -1,0 +1,237 @@
+from __future__ import annotations
+
+# ruff: noqa
+
+from dataclasses import replace
+import platform
+import pytest
+from inline_snapshot import snapshot
+
+from kimi_cli.tools.agent import Agent as AgentTool
+from kimi_cli.tools.background import TaskList, TaskOutput, TaskStop
+from kimi_cli.tools.dmail import SendDMail
+from kimi_cli.tools.file.glob import Glob
+from kimi_cli.tools.file.grep_local import Grep
+from kimi_cli.tools.file.read import ReadFile
+from kimi_cli.tools.file.read_media import ReadMediaFile
+from kimi_cli.tools.file.replace import EditFile
+from kimi_cli.tools.file.write import WriteFile
+from kimi_cli.tools.shell import Shell
+from kimi_cli.tools.think import Think
+from kimi_cli.tools.todo import SetTodoList
+from kimi_cli.tools.web.fetch import FetchURL
+from kimi_cli.tools.web.search import SearchWeb
+
+
+def test_agent_description(agent_tool: AgentTool):
+    """Test the description of Agent tool."""
+    assert agent_tool.base.description == snapshot(
+        """\
+Start a subagent for focused tasks. Create new or resume by `agent_id`.
+
+**Usage**
+- Keep `description` short (3-5 words).
+- Use `subagent_type` (default: `coder`), `model` to override.
+- Use `resume` to continue existing instances with context.
+- Run in foreground by default; `run_in_background=true` only for independent tasks.
+- Be explicit: code or research only.
+- Subagent results are private—summarize for user if needed.
+
+**Explore Agent** — Preferred for codebase research (read-only). Use when you need >3 searches, module understanding, or concurrent investigations. Specify thoroughness: "quick" (find file), "medium" (understand module), "thorough" (architecture analysis).
+
+**When Not To Use**
+Reading known paths, small file searches, tasks completable in 1-2 tool calls.
+"""
+    )
+
+
+def test_send_dmail_description(send_dmail_tool: SendDMail):
+    """Test the description of SendDMail tool."""
+    assert send_dmail_tool.base.description == snapshot(
+        "Send a message to your past self at a checkpoint. Context-only; no filesystem changes."
+    )
+
+
+def test_think_description(think_tool: Think):
+    """Test the description of Think tool."""
+    assert think_tool.base.description == snapshot(
+        "Tool for reasoning and logging thoughts. No side effects.\n"
+    )
+
+
+def test_set_todo_list_description(set_todo_list_tool: SetTodoList):
+    """Test the description of SetTodoList tool."""
+    assert set_todo_list_tool.base.description == snapshot(
+        "Track progress with a todo list."
+    )
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="Skipping test on Windows")
+def test_shell_description(shell_tool: Shell):
+    """Test the description of Shell tool."""
+    assert shell_tool.base.description == snapshot(
+        """\
+Execute a bash (`/bin/bash`) command. Use this tool to explore the filesystem, edit files, run scripts, get system information, etc.
+
+**Output:**
+The stdout and stderr will be combined and returned as a string. The output may be truncated if it is too long. If the command failed, the exit code will be provided in a system tag.
+
+If `run_in_background=true`, the command will be started as a background task and this tool will return a task ID instead of waiting for command completion. When doing that, you must provide a short `description`. You will be automatically notified when the task completes. Use `TaskOutput` for a non-blocking status/output snapshot, and only set `block=true` when you explicitly want to wait for completion. Use `TaskStop` only if the task must be cancelled. For human users in the interactive shell, background tasks are managed through `/task` only; do not suggest `/task list`, `/task output`, `/task stop`, `/tasks`, or any other invented shell subcommands.
+
+**Guidelines for safety and security:**
+- Each shell tool call will be executed in a fresh shell environment. The shell variables, current working directory changes, and the shell history is not preserved between calls.
+- The tool call will return after the command is finished. You shall not use this tool to execute an interactive command or a command that may run forever. For possibly long-running commands, you shall set `timeout` argument to a reasonable value.
+- Avoid using `..` to access files or directories outside of the working directory.
+- Avoid modifying files outside of the working directory unless explicitly instructed to do so.
+- Never run commands that require superuser privileges unless explicitly instructed to do so.
+
+**Guidelines for efficiency:**
+- For multiple related commands, use `&&` to chain them in a single call, e.g. `cd /path && ls -la`
+- Use `;` to run commands sequentially regardless of success/failure
+- Use `||` for conditional execution (run second command only if first fails)
+- Use pipe operations (`|`) and redirections (`>`, `>>`) to chain input and output between commands
+- Always quote file paths containing spaces with double quotes (e.g., cd "/path with spaces/")
+- Use `if`, `case`, `for`, `while` control flows to execute complex logic in a single call.
+- Verify directory structure before create/edit/delete files or directories to reduce the risk of failure.
+- Prefer `run_in_background=true` for long-running builds, tests, watchers, or servers when you need the conversation to continue before the command finishes.
+- After starting a background task, do not guess its outcome. Rely on the automatic completion notification whenever possible. Use `TaskOutput` for non-blocking progress snapshots by default, and set `block=true` only when you intentionally want to wait.
+- If you need to tell a human shell user how to manage background tasks, only mention `/task`. Do not invent `/task list`, `/task output`, `/task stop`, or `/tasks`.
+
+**Commands available:**
+- Shell environment: cd, pwd, export, unset, env
+- File system operations: ls, find, mkdir, rm, cp, mv, touch, chmod, chown
+- File viewing/editing: cat, grep, head, tail, diff, patch
+- Text processing: awk, sed, sort, uniq, wc
+- System information/operations: ps, kill, top, df, free, uname, whoami, id, date
+- Network operations: curl, wget, ping, telnet, ssh
+- Archive operations: tar, zip, unzip
+- Other: Other commands available in the shell environment. Check the existence of a command by running `which <command>` before using it.
+"""
+    )
+
+
+def test_task_output_description(task_output_tool: TaskOutput):
+    assert task_output_tool.base.description == snapshot(
+        """\
+Retrieve output from background tasks.
+
+Usage:
+- Default: non-blocking snapshot
+- `block=true`: wait for completion
+
+Returns: metadata, output preview, `output_path` (for full log via `ReadFile`)
+"""
+    )
+
+
+def test_task_list_description(task_list_tool: TaskList):
+    assert task_list_tool.base.description == snapshot(
+        """\
+List background tasks from the current session.
+
+Use to check active tasks, especially after context compaction or to confirm task IDs.
+
+Guidelines:
+- Default `active_only=true` filters to active tasks only.
+- Use `TaskOutput` to inspect a task after getting its ID.
+"""
+    )
+
+
+def test_task_stop_description(task_stop_tool: TaskStop):
+    assert task_stop_tool.base.description == snapshot(
+        "Stop a running background task. Use only for cancellation (destructive, may leave side effects). Returns current state if already complete.\n"
+    )
+
+
+def test_read_file_description(read_file_tool: ReadFile):
+    """Test the description of ReadFile tool."""
+    assert read_file_tool.base.description == snapshot(
+        "Read text files. Lines over 2000 chars truncated. Max 1000 lines, 102400 bytes per call. Negative offset = tail mode.\n"
+    )
+
+
+def test_read_media_file_description(read_media_file_tool: ReadMediaFile):
+    """Test the description of ReadMediaFile tool."""
+    assert read_media_file_tool.base.description == snapshot(
+        "Read image/video up to 100MB. Supports images and videos."
+    )
+
+
+def test_glob_description(runtime):
+    """Test the description of Glob tool."""
+    runtime.environment = replace(runtime.environment, os_kind="Linux")
+    glob_tool = Glob(runtime)
+    windows_path_hint = "On Windows, the `directory` parameter accepts both Windows native paths"
+
+    assert windows_path_hint not in glob_tool.base.description
+    assert glob_tool.base.description == snapshot(
+        "Find files by glob pattern.\n"
+    )
+
+
+def test_glob_description_on_windows(runtime):
+    """Test the Windows-specific description of Glob tool."""
+    runtime.environment = replace(runtime.environment, os_kind="Windows")
+    glob_tool = Glob(runtime)
+    windows_path_hint = "On Windows, the `directory` parameter accepts both Windows native paths"
+
+    assert windows_path_hint in glob_tool.base.description
+    assert glob_tool.base.description == snapshot(
+        """\
+Find files and directories using glob patterns. This tool supports standard glob syntax like `*`, `?`, and `**` for recursive searches.
+
+On Windows, the `directory` parameter accepts both Windows native paths (`C:\\Users\\foo`) and POSIX-style paths (`/c/Users/foo`, `/cygdrive/c/Users/foo`). Returned paths are in Windows native form with backslashes (NOT POSIX) — convert to forward slashes before using them in Shell commands.
+
+**When to use:**
+- Find files matching specific patterns (e.g., all Python files: `*.py`)
+- Search for files recursively in subdirectories (e.g., `src/**/*.js`)
+- Locate configuration files (e.g., `*.config.*`, `*.json`)
+- Find test files (e.g., `test_*.py`, `*_test.go`)
+
+**Example patterns:**
+- `*.py` - All Python files in current directory
+- `src/**/*.js` - All JavaScript files in src directory recursively
+- `test_*.py` - Python test files starting with "test_"
+- `*.config.{js,ts}` - Config files with .js or .ts extension
+
+**Bad example patterns:**
+- `**`, `**/*.py` - Any pattern starting with '**' will be rejected. Because it would recursively search all directories and subdirectories, which is very likely to yield large result that exceeds your context size. Always use more specific patterns like `src/**/*.py` instead.
+- `node_modules/**/*.js` - Although this does not start with '**', it would still highly possible to yield large result because `node_modules` is well-known to contain too many directories and files. Avoid recursively searching in such directories, other examples include `venv`, `.venv`, `__pycache__`, `target`. If you really need to search in a dependency, use more specific patterns like `node_modules/react/src/*` instead.
+"""
+    )
+
+
+def test_grep_description(grep_tool: Grep):
+    """Test the description of Grep tool."""
+    assert grep_tool.base.description == snapshot(
+        "Search files using ripgrep."
+    )
+
+
+def test_write_file_description(write_file_tool: WriteFile):
+    """Test the description of WriteFile tool."""
+    assert write_file_tool.base.description == snapshot(
+        "Write content to a file."
+    )
+
+
+def test_edit_file_description(edit_file_tool: EditFile):
+    """Test the description of EditFile tool."""
+    assert edit_file_tool.base.description == snapshot(
+        "Replace strings in text files."
+    )
+
+
+def test_search_web_description(search_web_tool: SearchWeb):
+    """Test the description of MoonshotSearch tool."""
+    assert search_web_tool.base.description == snapshot(
+        "Search the web."
+    )
+
+
+def test_fetch_url_description(fetch_url_tool: FetchURL):
+    """Test the description of FetchURL tool."""
+    assert fetch_url_tool.base.description == snapshot(
+        "Fetch a URL and extract main text."
+    )
