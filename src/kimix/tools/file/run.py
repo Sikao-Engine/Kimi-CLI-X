@@ -10,7 +10,6 @@ from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from pydantic import BaseModel, Field
 from kimi_cli.session import Session
 from kimix.tools.common import _maybe_export_output_async, _export_to_temp_file_async, ProcessTask
-from kimix.tools.file.bash import _BASH_COMMANDS, _WINDOWS_ALIASES
 from kimi_cli.tools.display import ShellDisplayBlock
 
 _HUGE_CMD_THRESHOLD = 10000
