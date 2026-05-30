@@ -11,6 +11,7 @@ import pytest
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk
 from kimi_cli.session import Session
 
+from kimi_cli.tools import SkipThisTool
 from kimix.tools.file.bash import (
     Bash,
     BashParams,
@@ -241,12 +242,10 @@ class TestBashCall:
         assert tmp_path.name in result.output or str(tmp_path).replace("\\", "/") in result.output
 
     async def test_bash_not_found_fallback(self, mock_session: MagicMock) -> None:
+        """When bash is not found, Bash.__init__ raises SkipThisTool."""
         with patch("kimix.tools.file.bash.bash_tool.find_bash", return_value=None):
-            bash = Bash(session=mock_session)
-            params = BashParams(cmd="echo hello")
-            result = await bash(params)
-            assert isinstance(result, ToolError)
-            assert "Bash executable not found" in result.output
+            with pytest.raises(SkipThisTool):
+                Bash(session=mock_session)
 
 
 # ============================================================================
