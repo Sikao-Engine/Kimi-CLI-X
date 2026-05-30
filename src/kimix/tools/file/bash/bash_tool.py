@@ -1,0 +1,219 @@
+"""Bash tool that executes commands via the system bash executable."""
+
+import os
+import shlex
+import shutil
+import sys
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
+from pydantic import BaseModel, Field
+from kimi_cli.session import Session
+from kimi_cli.tools import SkipThisTool
+
+from kimix.tools.common import _maybe_export_output_async, ProcessTask
+
+if TYPE_CHECKING:
+    from kimi_agent_sdk import CallableTool2 as _CallableTool2
+
+
+def find_bash() -> str | None:
+    """Find the system bash executable.
+
+    On Windows, prioritizes Git for Windows (msys) bash over WSL bash,
+    because msys bash handles Windows paths more predictably.
+    """
+    if sys.platform == "win32":
+        # Strategy 1: Find git location and derive the Git installation root.
+        # git.exe typically resides in <GitRoot>/cmd/git.exe,
+        # and bash.exe is in <GitRoot>/bin/bash.exe.
+        git_path = shutil.which("git")
+        if git_path:
+            git_exe = Path(git_path).resolve()
+            if git_exe.parent.name.lower() == "cmd":
+                git_root = git_exe.parent.parent
+            else:
+                git_root = git_exe.parent
+            for subpath in ("bin/bash.exe", "usr/bin/bash.exe"):
+                bash_candidate = git_root / subpath
+                if bash_candidate.exists():
+                    return str(bash_candidate.resolve())
+        # Strategy 2: Registry lookup for Git install location (most reliable)
+        try:
+            import winreg
+            reg_paths = [
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Git_is1"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Git_is1"),
+            ]
+            for hkey, subkey in reg_paths:
+                try:
+                    with winreg.OpenKey(hkey, subkey) as key:
+                        install_path, _ = winreg.QueryValueEx(key, "InstallLocation")
+                        for subpath in ("bin/bash.exe", "usr/bin/bash.exe"):
+                            bash_candidate = Path(install_path) / subpath
+                            if bash_candidate.exists():
+                                return str(bash_candidate.resolve())
+                except FileNotFoundError:
+                    pass
+        except Exception:
+            pass
+        # Strategy 3: bash.exe via PATH (Git/bin often in PATH)
+        bash_path = shutil.which("bash.exe")
+        if bash_path:
+            return str(Path(bash_path).resolve())
+
+        # Strategy 4: where command
+        try:
+            import subprocess
+            r = subprocess.run(
+                ["where", "bash.exe"],
+                capture_output=True, text=True, check=True
+            )
+            return r.stdout.strip().splitlines()[0]
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+
+        # Strategy 5: Common paths fallback
+        candidates = [
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+            r"C:\Git\bin\bash.exe",
+        ]
+        for candidate in candidates:
+            if Path(candidate).exists():
+                return str(Path(candidate).resolve())
+        local_git = Path.home() / "AppData" / "Local" / "Programs" / "Git" / "bin" / "bash.exe"
+        if local_git.exists():
+            return str(local_git.resolve())
+        scoop_git = Path.home() / "scoop" / "apps" / "git" / "current" / "bin" / "bash.exe"
+        if scoop_git.exists():
+            return str(scoop_git.resolve())
+
+    bash = shutil.which("bash")
+    if bash:
+        return bash
+    return None
+
+
+class BashParams(BaseModel):
+    """Parameters for the Bash tool — execute a bash command via the system bash."""
+
+    cmd: str = Field(description="Bash command name.")
+    args: list[str] = Field(default_factory=list, description="Command arguments.")
+    timeout: int = Field(
+        default=10,
+        ge=3,
+        le=180,
+        description="Timeout in seconds."
+    )
+    output_path: str | None = Field(
+        default=None,
+        description="Output file path."
+    )
+    cwd: str | None = Field(
+        default=None,
+        description="Working directory."
+    )
+
+
+class Bash(CallableTool2[BashParams]):
+    """Execute a bash command via the system bash, with background task support."""
+
+    name: str = "Bash"
+    description: str = "Execute a bash command via the system bash."
+    params: type[BashParams] = BashParams
+
+    def __init__(self, session: Session):
+        super().__init__()
+        self._session = session
+        self._bash = find_bash()
+        if not self._bash:
+            raise SkipThisTool()
+
+    @classmethod
+    def resolve_command(cls, command: str) -> tuple[str, "_CallableTool2 | None"]:
+        """Resolve a command name to its resolved name and optional builtin tool.
+
+        Args:
+            command: The command name (e.g., 'cat', 'dir').
+
+        Returns:
+            A tuple of (resolved_name, tool_instance_or_None).
+        """
+        from kimix.tools.file.bash import BASH_COMMANDS, WINDOWS_ALIASES
+
+        bash_name = WINDOWS_ALIASES.get(command, command)
+        tool = BASH_COMMANDS.get(bash_name)
+        return bash_name, tool
+
+    async def __call__(self, params: BashParams) -> ToolReturnValue:
+        """Execute the bash command via the system bash executable.
+
+        Args:
+            params: The parameters specifying the command and its arguments.
+
+        Returns:
+            ToolOk on success, ToolError on failure or timeout.
+        """
+        from kimix.tools.background.utils import remove_task_id
+
+        # Split space-separated cmd into cmd + args, respecting quotes
+        if " " in params.cmd or "\t" in params.cmd:
+            parts = shlex.split(params.cmd, posix=os.name != "nt")
+            params.cmd = parts[0]
+            params.args[:0] = parts[1:]
+
+        # Resolve Windows aliases
+        cmd, _ = self.resolve_command(params.cmd)
+
+        if not cmd:
+            return ToolError(
+                output="Empty command.",
+                message="No command specified.",
+                brief=f"Empty command: {params.cmd}",
+            )
+
+        bash_path = self._bash
+        if not bash_path:
+            return ToolError(
+                output="Bash executable not found.",
+                message="Bash executable not found. Please install bash.",
+                brief=f"Bash not found: {params.cmd}",
+            )
+
+        # Build the command line to pass to bash -c
+        full_args = [cmd] + list(params.args)
+        cmdline = shlex.join(full_args)
+
+        process_task = ProcessTask(bash_path, ["-c", cmdline], params.cwd, None)
+        task_id = await process_task.start(self._session, "bash", cmd)
+
+        await process_task.wait(params.timeout)
+
+        if await process_task.thread_is_alive():
+            output = await process_task.stream.get_output() if process_task.stream else ""
+            return ToolError(
+                output=output or f"Running in background. task_id: `{task_id}`. use `TaskOutput` or `Input`",
+                message="Process timeout",
+                brief=f"Timeout: {params.cmd}",
+            )
+
+        remove_task_id(self._session, task_id)
+
+        output = await process_task.stream.pop_output() if process_task.stream else ""
+        success = await process_task.stream.success() if process_task.stream else False
+
+        # Handle output_path
+        if params.output_path:
+            import anyio
+            async with await anyio.open_file(params.output_path, 'w', encoding='utf-8', errors='replace') as f:
+                await f.write(output)
+            output = f'saved to file `{params.output_path}`'
+            return ToolOk(output=output, brief=params.cmd)
+
+        if not success:
+            return ToolError(output=output, message="Command execution failed", brief=f"Command execution failed: {params.cmd}")
+
+        output = await _maybe_export_output_async(output)
+        return ToolOk(output=output, brief=params.cmd)

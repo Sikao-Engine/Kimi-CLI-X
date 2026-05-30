@@ -1,4 +1,4 @@
-"""Bash command tools implemented in pure Python."""
+"""Bash command tools — executed via the system bash when available."""
 import shlex
 from pathlib import Path
 from .alias import Alias
@@ -124,136 +124,6 @@ from .xz import Xz
 from .yes import Yes
 from .zip import Zip
 import os
-
-__all__ = [
-    "Alias",
-    "Awk",
-    "Base64",
-    "Basename",
-    "Bc",
-    "Bunzip2",
-    "Bzip2",
-    "Cal",
-    "Cat",
-    "Chgrp",
-    "Chmod",
-    "Chown",
-    "Cksum",
-    "Cmp",
-    "Comm",
-    "Cp",
-    "Crontab",
-    "Csplit",
-    "Curl",
-    "Cut",
-    "Date",
-    "Dc",
-    "Df",
-    "Diff",
-    "Dirname",
-    "Du",
-    "Echo",
-    "EnvsSubst",
-    "Env",
-    "Expand",
-    "Expr",
-    "Export",
-    "Factor",
-    "FalseCmd",
-    "File",
-    "Find",
-    "Fold",
-    "Fmt",
-    "Free",
-    "Fuser",
-    "Grep",
-    "Groups",
-    "Gunzip",
-    "Gzip",
-    "Head",
-    "Hexdump",
-    "History",
-    "Host",
-    "Hostname",
-    "Hwclock",
-    "Id",
-    "Ip",
-    "Ifconfig",
-    "Install",
-    "Iostat",
-    "Ln",
-    "Ls",
-    "LsbRelease",
-    "Lsof",
-    "Man",
-    "Md5sum",
-    "Mkdir",
-    "Mkfifo",
-    "Mktemp",
-    "Mv",
-    "Netstat",
-    "Nl",
-    "Nslookup",
-    "Od",
-    "Ping",
-    "Printf",
-    "Printenv",
-    "Ps",
-    "Pwd",
-    "Readlink",
-    "Realpath",
-    "Renice",
-    "Rev",
-    "Rm",
-    "Rmdir",
-    "Scriptreplay",
-    "Sed",
-    "Seq",
-    "Sha256sum",
-    "Shuf",
-    "Sleep",
-    "Split",
-    "Ss",
-    "Stat",
-    "Strings",
-    "SwVers",
-    "Systeminfo",
-    "Tac",
-    "Tail",
-    "Tar",
-    "Test",
-    "Top",
-    "Touch",
-    "Tr",
-    "Traceroute",
-    "Trap",
-    "Tree",
-    "TrueCmd",
-    "Ulimit",
-    "Umask",
-    "Uname",
-    "Unexpand",
-    "Uniq",
-    "Unxz",
-    "Unzip",
-    "Uptime",
-    "Vmstat",
-    "Wc",
-    "Wget",
-    "Which",
-    "Who",
-    "Whoami",
-    "Xxd",
-    "Xz",
-    "Yes",
-    "Zip",
-    # New bash dispatcher tool and data
-    "Bash",
-    "BashParams",
-    "BASH_COMMANDS",
-    "WINDOWS_ALIASES",
-]
-
 
 # ============================================================
 # Bash command dispatch tool
@@ -417,75 +287,30 @@ WINDOWS_ALIASES: dict[str, str] = {
 _BASH_COMMANDS = BASH_COMMANDS
 _WINDOWS_ALIASES = WINDOWS_ALIASES
 
+# New system-bash-based Bash tool
+from .bash_tool import Bash, BashParams
 
-class BashParams(BaseModel):
-    """Parameters for the Bash tool - execute a bash command via built-in Python implementation."""
-
-    cmd: str = Field(
-        description="Bash command name."
-    )
-    args: list[str] = Field(
-        default_factory=list,
-        description="Command arguments."
-    )
-    timeout: int = Field(
-        default=10,
-        ge=3,
-        le=180,
-        description="Timeout in seconds."
-    )
-    output_path: str | None = Field(
-        default=None,
-        description="Output file path."
-    )
-    cwd: str | None = Field(
-        default=None,
-        description="Working directory."
-    )
-
-
-class Bash(CallableTool2[BashParams]):
-    """Execute a bash command using built-in Python implementations, with background task support."""
-
-    name: str = "Bash"
-    description: str = "Execute a bash command using built-in Python implementations."
-    params: type[BashParams] = BashParams
-
-    def __init__(self, session: Session):
-        super().__init__()
-        import os
-        os.environ['PYTHONIOENCODING'] = 'utf-8'
-        self._session = session
-
-    @classmethod
-    def resolve_command(cls, command: str) -> tuple[str, CallableTool2 | None]:
-        """Resolve a command name to its tool implementation.
-
-        Args:
-            command: The command name (e.g., 'cat', 'dir').
-
-        Returns:
-            A tuple of (resolved_name, tool_instance_or_None).
-        """
-        bash_name = WINDOWS_ALIASES.get(command, command)
-        tool = BASH_COMMANDS.get(bash_name)
-        return bash_name, tool
-
-    async def __call__(self, params: BashParams) -> ToolReturnValue:
-        """Execute the bash command.
-
-        Args:
-            params: The parameters specifying the command and its arguments.
-
-        Returns:
-            ToolOk on success, ToolError on failure or timeout.
-        """
-        from kimix.tools.file.bash.run_bash import run_bash
-
-        # Split space-separated cmd into cmd + args, respecting quotes
-        if " " in params.cmd or "\t" in params.cmd:
-            parts = shlex.split(params.cmd, posix=os.name != "nt")
-            params.cmd = parts[0]
-            params.args[:0] = parts[1:]
-
-        return await run_bash(params, self._session)
+__all__ = [
+    "Alias", "Awk", "Base64", "Basename", "Bc", "Bunzip2", "Bzip2",
+    "Cal", "Cat", "Chgrp", "Chmod", "Chown", "Cksum", "Cmp", "Comm",
+    "Cp", "Crontab", "Csplit", "Curl", "Cut", "Date", "Dc", "Df",
+    "Diff", "Dirname", "Du", "Echo", "EnvsSubst", "Env", "Expand",
+    "Expr", "Export", "Factor", "FalseCmd", "File", "Find", "Fold",
+    "Fmt", "Free", "Fuser", "Grep", "Groups", "Gunzip", "Gzip",
+    "Head", "Hexdump", "History", "Host", "Hostname", "Hwclock",
+    "Id", "Ifconfig", "Install", "Iostat", "Ip", "Ln", "Ls",
+    "LsbRelease", "Lsof", "Man", "Md5sum", "Mkdir", "Mkfifo",
+    "Mktemp", "Mv", "Netstat", "Nl", "Nslookup", "Od", "Ping",
+    "Printf", "Printenv", "Ps", "Pwd", "Readlink", "Realpath",
+    "Renice", "Rev", "Rm", "Rmdir", "Scriptreplay", "Sed", "Seq",
+    "Sha256sum", "Shuf", "Sleep", "Split", "Ss", "Stat", "Strings",
+    "SwVers", "Systeminfo", "Tac", "Tail", "Tar", "Test", "Top",
+    "Touch", "Tr", "Traceroute", "Trap", "Tree", "TrueCmd", "Type",
+    "Ulimit", "Umask", "Uname", "Unexpand", "Uniq", "Unxz", "Unzip",
+    "Uptime", "Vmstat", "Wc", "Wget", "Which", "Who", "Whoami",
+    "Xxd", "Xz", "Yes", "Zip",
+    # Dispatcher & params
+    "Bash", "BashParams",
+    # Maps
+    "BASH_COMMANDS", "WINDOWS_ALIASES",
+]

@@ -59,10 +59,10 @@ def get_system_prompt(
             role_doc = f'You are a {role}'
             items.append(
                 'Interactive: `Run`/`Python` short timeout, then `TaskOutput`/`Input`.')
-            if args.KIMI_OS == 'Windows':
-                items.append('No shell, powershell or cmd: use `Run`/`Python` instead.')
-            else:
-                items.append('No shell or bash: use `Run`/`Python` instead.')
+            # if args.KIMI_OS == 'Windows':
+            #     items.append('No shell, powershell or cmd: use `Run`/`Python` instead.')
+            # else:
+            #     items.append('No shell or bash: use `Run`/`Python` instead.')
             items.append('Multi-step: use `SetTodoList` and `StepMemory`. Finish all before ending.')
             if yolo and not is_sub_agent:
                 items.append('Yolo: no asking. accept all.')

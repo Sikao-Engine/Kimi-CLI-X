@@ -157,7 +157,7 @@ class TestBashCall:
         params = BashParams(cmd="no_such_command_12345", timeout=5)
         result = await bash(params)
         assert isinstance(result, ToolError)
-        assert "Unknown bash command" in result.output
+        assert "command not found" in result.output or "Unknown bash command" in result.output
 
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-aliases apply universally but we test 'dir' alias")
     async def test_dir_alias_dispatches_to_ls(self, mock_session: MagicMock) -> None:
