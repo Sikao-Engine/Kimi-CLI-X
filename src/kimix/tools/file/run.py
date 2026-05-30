@@ -36,15 +36,13 @@ _DEFAULT_FORBIDDEN_COMMANDS = [
     "regedit",
     "regedt32",
 ]
-
-
 class RunParams(BaseModel):
-    executable: str = Field(
-        description="Executable path or application name, no need for a full path."
-    )
-    args: str = Field(
-        default="",
-        description="Command arguments."
+    command: str = Field(
+        description=(
+            "Executable command line. Only real executables / processes are accepted — "
+            "No shell syntax (pipes, redirects, &&, ||, variables, etc.). "
+            "Example: `python -c \"print(1)\"` or `git status`."
+        )
     )
     timeout: int = Field(
         default=10,
@@ -69,6 +67,7 @@ class RunParams(BaseModel):
         description="Run the process in the background and return immediately."
     )
 
+
 class Run(CallableTool2[RunParams]):
     name: str = "Run"
     description: str = "Run an executable or bash command."
@@ -80,49 +79,71 @@ class Run(CallableTool2[RunParams]):
         super().__init__()
         self._session = session
         self._semaphore = asyncio.Semaphore(8)
-
+        self.use_posix = sys.platform != "win32"
 
     async def __call__(self, params: RunParams) -> ToolReturnValue:
         import os
         script_path: str | None = None
-        # Convert args from str to list via shlex.split
-        args_list: list[str] = shlex.split(params.args) if params.args else []
-        try:
-            # params.executable may contain arguments, split it respecting quotes, then insert to the start of args_list
-            # Try progressively longer prefixes to find an existing file, so paths with spaces are handled.
-            if " " in params.executable:
-                try:
-                    import sys
-                    parts = shlex.split(params.executable, posix=os.name != "nt")
-                except ValueError:
-                    parts = params.executable.split(" ")
-                candidate = parts[0]
-                for i in range(1, len(parts)):
-                    candidate += " " + parts[i]
-                    try:
-                        is_file = Path(candidate).is_file()
-                    except OSError:
-                        is_file = False
-                    if is_file:
-                        params.executable = candidate
-                        remaining = parts[i + 1 :]
-                        if remaining:
-                            args_list = remaining + args_list
-                        break
-                else:
-                    params.executable = parts[0]
-                    remaining = parts[1:]
-                    if remaining:
-                        args_list = remaining + args_list
+        use_posix = self.use_posix
 
+        # Split the full command into parts.
+        # Use posix=False on Windows to preserve backslashes in paths;
+        # on POSIX systems use posix=True for correct quoting/escaping.
+        # double quotes are NOT stripped in posix=False mode, so we strip them below.
+        cmd_parts: list[str] = shlex.split(params.command, posix=use_posix)
+        if not cmd_parts:
+            return ToolError(
+                output="",
+                message="Empty command.",
+                brief="Empty command",
+            )
+
+        # -- Resolve the executable: progressive prefix lookup for paths with spaces --
+        # First, strip outer double quotes from the first element if present.
+        # (Only needed when posix=False; posix=True already strips shell quotes.)
+        first = cmd_parts[0]
+        if not use_posix and first.startswith('"') and first.endswith('"'):
+            first = first[1:-1]
+        executable = first
+        args_raw: list[str] = cmd_parts[1:]
+
+        if len(cmd_parts) > 1:
+            # Try progressively longer prefixes to find an existing file,
+            # so unquoted paths with spaces are handled correctly.
+            for i in range(2, len(cmd_parts) + 1):
+                candidate = " ".join(cmd_parts[:i])
+                # Strip outer double quotes if present on the candidate
+                if not use_posix and candidate.startswith('"') and candidate.endswith('"'):
+                    candidate = candidate[1:-1]
+                try:
+                    if Path(candidate).is_file():
+                        executable = candidate
+                        args_raw = cmd_parts[i:]
+                        break
+                except OSError:
+                    pass
+
+        # Strip surrounding double quotes from each arg.
+        # Only needed when posix=False, because posix=True already strips them.
+        if not use_posix:
+            args_list: list[str] = []
+            for arg in args_raw:
+                if arg.startswith('"') and arg.endswith('"'):
+                    args_list.append(arg[1:-1])
+                else:
+                    args_list.append(arg)
+        else:
+            args_list = list(args_raw)
+
+        try:
             display_args = [arg[:100] + '...' if len(arg) > 100 else arg for arg in args_list]
-            cmd_str = shlex.join([params.executable] + display_args)
-            display_cmd = params.executable if len(cmd_str) > _HUGE_CMD_THRESHOLD else cmd_str
+            cmd_str = shlex.join([executable] + display_args)
+            display_cmd = executable if len(cmd_str) > _HUGE_CMD_THRESHOLD else cmd_str
 
             # Check forbidden commands (default + user-configured)
             forbidden_commands = _DEFAULT_FORBIDDEN_COMMANDS + self._session.custom_config.get("config_json", {}).get("forbidden_commands", [])
             if forbidden_commands:
-                full_cmd = " ".join([params.executable] + args_list)
+                full_cmd = params.command
                 normalized_cmd = " ".join(full_cmd.split())
                 cmd_tokens = normalized_cmd.split()
                 for forbidden in forbidden_commands:
@@ -139,35 +160,35 @@ class Run(CallableTool2[RunParams]):
                             brief=display_cmd,
                         )
 
-            # Check if params.executable is a valid process name first (executable in PATH or existing file),
+            # Check if executable is a valid process (in PATH or existing file),
             # then fall back to bash built-in commands.
             import shutil
 
             is_process = False
             is_py = False
-            if (params.executable == 'python' and (shutil.which('python') is None) and (not Path('./python').exists())) or (params.executable == 'python.exe' and (shutil.which('python.exe') is None) and (not Path('./python.exe').exists())):
-                params.executable = sys.executable
+            if (executable == 'python' and (shutil.which('python') is None) and (not Path('./python').exists())) or (executable == 'python.exe' and (shutil.which('python.exe') is None) and (not Path('./python.exe').exists())):
+                executable = sys.executable
                 is_process = True
                 is_py = True
-            elif os.sep in params.executable or "/" in params.executable:
+            elif os.sep in executable or "/" in executable:
                 # Contains path separator - check if it's an existing file
-                is_process = Path(params.executable).is_file()
+                is_process = Path(executable).is_file()
             else:
                 # Bare command name - check if it's in PATH
-                is_process = shutil.which(params.executable) is not None
+                is_process = shutil.which(executable) is not None
 
             if not is_process:
                 # Not a real process - check if it's a bash built-in command.
-                # Check original command name first, then try Windows alias.
                 warning = " WARNING: This tool does not support shell commands; use `Python` tool."
-                if params.executable in _BASH_COMMANDS:
+                if executable in _BASH_COMMANDS:
+                    # Pass params so run_bash can extract cmd + args from command
                     result = await run_bash(params, self._session)
                     return ToolReturnValue(
                         is_error=result.is_error,
                         message=(result.message or "") + warning, brief=result.brief or "", output=result.output,
                         display=result.display
                     )
-                bash_name = _WINDOWS_ALIASES.get(params.executable, params.executable)
+                bash_name = _WINDOWS_ALIASES.get(executable, executable)
                 if bash_name in _BASH_COMMANDS:
                     result = await run_bash(params, self._session)
                     return ToolReturnValue(
@@ -178,10 +199,9 @@ class Run(CallableTool2[RunParams]):
                 else:
                     return ToolError(
                         output="",
-                        message=f"Executable not found: '{params.executable}' is not a valid executable or bash built-in command.",
+                        message=f"Executable not found: '{executable}' is not a valid executable or bash built-in command.",
                         brief=display_cmd,
                     )
-
 
             # Handle extremely long python -c scripts via temp file (Windows CreateProcessW ~32767 limit)
             if is_py:
@@ -203,8 +223,8 @@ class Run(CallableTool2[RunParams]):
                             env_dict[key] = value
                         else:
                             env_dict[item] = '1'
-                task = ProcessTask(params.executable, args_list, params.cwd, env_dict)
-                task_id = await task.start(self._session, "run", Path(params.executable).stem)
+                task = ProcessTask(executable, args_list, params.cwd, env_dict)
+                task_id = await task.start(self._session, "run", Path(executable).stem)
 
                 if params.run_in_background:
                     return ToolOk(
@@ -216,7 +236,7 @@ class Run(CallableTool2[RunParams]):
                 # Wait for completion with timeout (allow a small buffer for cleanup)
                 wait_timeout = params.timeout
                 await task.wait(wait_timeout)
-                
+
                 if await task.thread_is_alive():
                     output = await task.stream.get_output() if task.stream else ""
                     return ToolError(
@@ -231,13 +251,12 @@ class Run(CallableTool2[RunParams]):
                 # Get output
                 output = await task.stream.pop_output() if task.stream else ""
 
-                # Clean up temp file since process has finished
                 # Handle output export if needed
                 if params.output_path:
                     async with await anyio.open_file(params.output_path, 'w', encoding='utf-8', errors='replace') as f:
                         await f.write(output)
                     output = f'saved to file `{params.output_path}`'
-                
+
                 # Check success
                 success = await task.stream.success() if task.stream else False
 
@@ -269,4 +288,3 @@ class Run(CallableTool2[RunParams]):
                     os.remove(script_path)
                 except Exception:
                     pass
-

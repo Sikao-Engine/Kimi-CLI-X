@@ -29,10 +29,17 @@ async def run_bash(params: "BashParams | RunParams", session: Session) -> ToolRe
         remove_task_id,
     )
 
-    # Normalize: accept both BashParams.cmd and RunParams.executable
-    cmd: str = getattr(params, 'cmd', None) or getattr(params, 'executable', '')
-    # Normalize args: RunParams.args is str (split later by Run.__call__), BashParams.args is list[str]
-    if isinstance(params.args, str):
+    # Normalize: accept BashParams.cmd, RunParams.executable (legacy), or RunParams.command
+    cmd: str = getattr(params, 'cmd', None) or getattr(params, 'executable', None) or ''
+    if not cmd:
+        # New RunParams with 'command' field — extract first token as cmd, rest as args
+        import shlex
+        cmd_parts = shlex.split(getattr(params, 'command', ''))
+        cmd = cmd_parts[0] if cmd_parts else ''
+        # Set args on params so bash builtins can access them
+        object.__setattr__(params, 'args', cmd_parts[1:] if len(cmd_parts) > 1 else [])
+    # Normalize args: RunParams.args was str (legacy), BashParams.args is list[str]
+    if hasattr(params, 'args') and isinstance(params.args, str):
         import shlex
         params.args = shlex.split(params.args) if params.args else []
 

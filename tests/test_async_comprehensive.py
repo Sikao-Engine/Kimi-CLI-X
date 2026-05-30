@@ -429,7 +429,7 @@ class TestRunToolAsync:
 
     async def test_foreground_run_awaits_all_async_calls(self, mock_session: MagicMock) -> None:
         tool = Run(session=mock_session)
-        params = RunParams(executable=sys.executable, args='-c "print(\'run_async\')"', timeout=10)
+        params = RunParams(command=f'{sys.executable} -c "print(\'run_async\')"', timeout=10)
         result = await tool(params)
         assert isinstance(result, ToolOk)
         assert "run_async" in str(result.output)
@@ -437,8 +437,7 @@ class TestRunToolAsync:
     async def test_foreground_timeout_keeps_task_registered(self, mock_session: MagicMock) -> None:
         tool = Run(session=mock_session)
         params = RunParams(
-            executable=sys.executable,
-            args='-c "import time; time.sleep(100)"',
+            command=f'{sys.executable} -c "import time; time.sleep(100)"',
             timeout=3,
         )
         result = await tool(params)

@@ -266,32 +266,32 @@ def mock_process_task() -> MagicMock:
 
 class TestRunForbiddenCommands:
     async def test_forbidden_command_exact(self, run_tool: Run) -> None:
-        params = RunParams(executable="git", args="commit -m msg")
+        params = RunParams(command="git commit -m msg")
         result = await run_tool(params)
         assert isinstance(result, ToolError)
         assert result.brief == "git commit -m msg"
 
     async def test_forbidden_command_with_path_in_path(self, run_tool: Run) -> None:
-        params = RunParams(executable="git commit", args="-m msg")
+        params = RunParams(command="git commit -m msg")
         result = await run_tool(params)
         assert isinstance(result, ToolError)
         assert "git" in result.brief and "commit" in result.brief
 
     async def test_forbidden_command_rm_rf(self, run_tool: Run) -> None:
-        params = RunParams(executable="rm", args="-rf /")
+        params = RunParams(command="rm -rf /")
         result = await run_tool(params)
         assert isinstance(result, ToolError)
         assert "rm" in result.brief
 
     async def test_allowed_command(self, run_tool: Run, mock_process_task: MagicMock) -> None:
-        params = RunParams(executable="git", args="status")
+        params = RunParams(command="git status")
         result = await run_tool(params)
         assert isinstance(result, ToolOk)
 
     async def test_forbidden_command_prefix_only(
         self, run_tool: Run, mock_process_task: MagicMock
     ) -> None:
-        params = RunParams(executable="git", args="commitment something")
+        params = RunParams(command="git commitment something")
         result = await run_tool(params)
         assert isinstance(result, ToolOk)
 
@@ -299,7 +299,7 @@ class TestRunForbiddenCommands:
         self, run_tool: Run, mock_process_task: MagicMock
     ) -> None:
         run_tool._session.custom_config = {"config_json": {}}
-        params = RunParams(executable="git", args="status")
+        params = RunParams(command="git status")
         result = await run_tool(params)
         assert isinstance(result, ToolOk)
 
@@ -307,7 +307,7 @@ class TestRunForbiddenCommands:
         self, run_tool: Run, mock_process_task: MagicMock
     ) -> None:
         run_tool._session.custom_config = {"config_json": {"forbidden_commands": [123, None, ""]}}
-        params = RunParams(executable="git", args="status")
+        params = RunParams(command="git status")
         result = await run_tool(params)
         assert isinstance(result, ToolOk)
 

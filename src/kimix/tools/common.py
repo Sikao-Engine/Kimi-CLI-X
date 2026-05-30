@@ -1,8 +1,11 @@
 import asyncio
+import atexit
 import codecs
 import io
 import os
 import re
+import shutil
+import uuid
 from pathlib import Path
 import queue
 import threading
@@ -97,9 +100,18 @@ from kimi_cli.session import Session
 if TYPE_CHECKING:
     from kimix.tools.background.utils import BackgroundStream
 OUTPUT_LIMIT = 65536
-_temp_folder = Path.home() / '.kimi' / 'sessions'
+_temp_folder = Path.home() / '.kimi' / 'sessions' / uuid.uuid4().hex
+_temp_folder.mkdir(parents=True, exist_ok=True)
 _temp_idx = 0
 _temp_set: dict[Path, int] = dict()
+
+
+def _cleanup_temp_folder() -> None:
+    if _temp_folder.exists():
+        shutil.rmtree(_temp_folder, ignore_errors=True)
+
+
+atexit.register(_cleanup_temp_folder)
 
 
 
