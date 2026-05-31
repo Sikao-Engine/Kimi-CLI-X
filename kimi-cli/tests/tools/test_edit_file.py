@@ -562,3 +562,44 @@ async def test_edit_outside_work_dir_directory_has_warning(
         )
         assert result.is_error
         assert "[out of work-dir]" in result.message
+
+
+# --- mark_dirty tests ---
+
+
+async def test_edit_after_file_changed_returns_error(
+    edit_file_tool: EditFile, temp_work_dir: KaosPath, session
+):
+    """Editing a file whose mtime matches the recorded mtime returns error."""
+    file_path = temp_work_dir / "changed.txt"
+    await file_path.write_text("original content")
+
+    # Pre-populate the tracker so mark_dirty finds an equal timestamp
+    # and returns False.
+    from kimi_cli.utils.path import kaos_path_from_user_input
+    key = str(kaos_path_from_user_input(str(file_path)).canonical())
+    session.file_mtime._times[key] = file_path.stat().st_mtime
+
+    result = await edit_file_tool(
+        Params(path=str(file_path), edit=Edit(old="original", new="modified"))
+    )
+
+    assert result.is_error
+    assert "File modified" in result.message
+    assert "read file first" in result.message
+
+
+async def test_edit_new_file_not_in_dict_succeeds(
+    edit_file_tool: EditFile, temp_work_dir: KaosPath
+):
+    """Editing a file not in tracker dict should succeed normally."""
+    file_path = temp_work_dir / "new_untracked.txt"
+    await file_path.write_text("original content")
+
+    result = await edit_file_tool(
+        Params(path=str(file_path), edit=Edit(old="original", new="modified"))
+    )
+
+    assert not result.is_error
+    assert "successfully edited" in result.message
+    assert await file_path.read_text() == "modified content"

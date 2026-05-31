@@ -4,7 +4,7 @@ import asyncio
 import builtins
 import shutil
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,7 @@ import json
 from kaos.path import KaosPath
 from kosong.message import Message
 
+from kimi_cli.file_mtine import FileMTime
 from kimi_cli.metadata import WorkDirMeta, load_metadata, save_metadata
 from kimi_cli.session_state import SessionState, load_session_state, save_session_state
 from kimi_cli.soul.context_records import ExportedContext
@@ -52,6 +53,8 @@ class Session:
     custom_data: dict[str, Any]
     
     custom_config: dict[str, Any]
+
+    file_mtime: FileMTime = field(default_factory=FileMTime)
     @property
     def dir(self) -> Path:
         """The absolute path of the session directory."""

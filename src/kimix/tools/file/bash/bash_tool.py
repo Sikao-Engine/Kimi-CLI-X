@@ -91,6 +91,36 @@ def find_bash() -> str | None:
         if scoop_git.exists():
             return str(scoop_git.resolve())
 
+    if sys.platform == "darwin":
+        # Strategy 1: Homebrew bash (Apple Silicon) – often newer than system bash
+        candidate = Path("/opt/homebrew/bin/bash")
+        if candidate.exists():
+            return str(candidate.resolve())
+        # Strategy 2: Homebrew bash (Intel Macs)
+        candidate = Path("/usr/local/bin/bash")
+        if candidate.exists():
+            return str(candidate.resolve())
+        # Strategy 3: MacPorts
+        candidate = Path("/opt/local/bin/bash")
+        if candidate.exists():
+            return str(candidate.resolve())
+        # Strategy 4: Git bash fallback (official Git installer for macOS)
+        git_path = shutil.which("git")
+        if git_path:
+            git_exe = Path(git_path).resolve()
+            if git_exe.parent.name.lower() == "bin":
+                git_root = git_exe.parent
+            else:
+                git_root = git_exe.parent
+            for subpath in ("bin/bash", "usr/bin/bash"):
+                bash_candidate = git_root / subpath
+                if bash_candidate.exists():
+                    return str(bash_candidate.resolve())
+        # Strategy 5: System bash (older, but guaranteed to exist)
+        candidate = Path("/bin/bash")
+        if candidate.exists():
+            return str(candidate.resolve())
+
     bash = shutil.which("bash")
     if bash:
         return bash
@@ -100,7 +130,7 @@ def find_bash() -> str | None:
 class BashParams(BaseModel):
     """Parameters for the Bash tool — execute a bash command via the system bash."""
 
-    cmd: str = Field(description="Bash command name.")
+    cmd: str = Field(description="Bash command.")
     timeout: int = Field(
         default=10,
         ge=3,

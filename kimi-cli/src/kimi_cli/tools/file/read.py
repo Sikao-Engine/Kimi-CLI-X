@@ -183,8 +183,10 @@ class ReadFile(CallableTool2[Params]):
             else:
                 result = await self._read_forward(p, params)
 
-            if isinstance(result, ToolOk) and isinstance(result.output, str):
-                result.output = result.output[params.char_offset:params.max_char]
+            if isinstance(result, ToolOk):
+                if isinstance(result.output, str):
+                    result.output = result.output[params.char_offset:params.max_char]
+                self._session.file_mtime.clean_file(params.path)
             return result
         except Exception as e:
             logger.warning("ReadFile failed: {path}: {error}", path=params.path, error=e)

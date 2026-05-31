@@ -330,3 +330,39 @@ async def test_write_outside_relative_path_error_has_warning(
     result = await write_file_tool(Params(path="../outside.txt", content="content"))
     assert result.is_error
     assert "[out of work-dir]" in result.message
+
+
+# --- mark_dirty tests ---
+
+
+async def test_write_after_file_changed_returns_error(
+    write_file_tool: WriteFile, temp_work_dir: KaosPath, session
+):
+    """Writing to a file whose mtime matches the recorded mtime returns error."""
+    file_path = temp_work_dir / "changed.txt"
+    await file_path.write_text("original content")
+
+    # Pre-populate the tracker with the current mtime so mark_dirty
+    # finds an equal timestamp and returns False.
+    from kimi_cli.utils.path import kaos_path_from_user_input
+    key = str(kaos_path_from_user_input(str(file_path)).canonical())
+    session.file_mtime._times[key] = file_path.stat().st_mtime
+
+    result = await write_file_tool(Params(path=str(file_path), content="new content"))
+
+    assert result.is_error
+    assert "File modified" in result.message
+    assert "read file first" in result.message
+
+
+async def test_write_new_file_not_in_dict_succeeds(
+    write_file_tool: WriteFile, temp_work_dir: KaosPath
+):
+    """Writing a new file (not in tracker dict) should succeed normally."""
+    file_path = temp_work_dir / "new_untracked.txt"
+
+    result = await write_file_tool(Params(path=str(file_path), content="new content"))
+
+    assert not result.is_error
+    assert "successfully overwritten" in result.message
+    assert await file_path.read_text() == "new content"
