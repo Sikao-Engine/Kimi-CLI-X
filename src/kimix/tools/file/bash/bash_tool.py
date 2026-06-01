@@ -31,7 +31,28 @@ def find_bash() -> str | None:
     because msys bash handles Windows paths more predictably.
     """
     if sys.platform == "win32":
-        # Strategy 1: Find git location and derive the Git installation root.
+        # Strategy 1: read cached git address from share directory
+        git_cache = get_share_dir() / "git"
+        if git_cache.is_dir():
+            # Git was installed directly into the share directory
+            for subpath in ("bin/bash.exe", "usr/bin/bash.exe"):
+                bash_candidate = git_cache / subpath
+                if bash_candidate.exists():
+                    return str(bash_candidate.resolve())
+        elif git_cache.is_file():
+            # Read cached git.exe path from file
+            git_exe_path = git_cache.read_text().strip()
+            if git_exe_path:
+                git_exe = Path(git_exe_path).resolve()
+                if git_exe.parent.name.lower() == "cmd":
+                    git_root = git_exe.parent.parent
+                else:
+                    git_root = git_exe.parent
+                for subpath in ("bin/bash.exe", "usr/bin/bash.exe"):
+                    bash_candidate = git_root / subpath
+                    if bash_candidate.exists():
+                        return str(bash_candidate.resolve())
+        # Strategy 2: Find git location and derive the Git installation root.
         # git.exe typically resides in <GitRoot>/cmd/git.exe,
         # and bash.exe is in <GitRoot>/bin/bash.exe.
         git_path = shutil.which("git")
@@ -45,7 +66,7 @@ def find_bash() -> str | None:
                 bash_candidate = git_root / subpath
                 if bash_candidate.exists():
                     return str(bash_candidate.resolve())
-        # Strategy 2: Registry lookup for Git install location (most reliable)
+        # Strategy 3: Registry lookup for Git install location
         try:
             import winreg
             reg_paths = [
@@ -64,12 +85,12 @@ def find_bash() -> str | None:
                     pass
         except Exception:
             pass
-        # Strategy 3: bash.exe via PATH (Git/bin often in PATH)
+        # Strategy 4: bash.exe via PATH (Git/bin often in PATH)
         bash_path = shutil.which("bash.exe")
         if bash_path:
             return str(Path(bash_path).resolve())
 
-        # Strategy 4: where command
+        # Strategy 5: where command
         try:
             import subprocess
             r = subprocess.run(
@@ -80,7 +101,7 @@ def find_bash() -> str | None:
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
 
-        # Strategy 5: Common paths fallback
+        # Strategy 6: Common paths fallback
         candidates = [
             r"C:\Program Files\Git\bin\bash.exe",
             r"C:\Program Files (x86)\Git\bin\bash.exe",
@@ -95,6 +116,18 @@ def find_bash() -> str | None:
         scoop_git = Path.home() / "scoop" / "apps" / "git" / "current" / "bin" / "bash.exe"
         if scoop_git.exists():
             return str(scoop_git.resolve())
+        # Strategy 7: Download and install PortableGit to the share directory
+        try:
+            from kimix.tools.file.bash.install_git import install_git
+            install_dir = str(get_share_dir() / "git")
+            if install_git(install_dir=install_dir):
+                # Retry strategy 1 after successful install
+                for subpath in ("bin/bash.exe", "usr/bin/bash.exe"):
+                    bash_candidate = Path(install_dir) / subpath
+                    if bash_candidate.exists():
+                        return str(bash_candidate.resolve())
+        except Exception:
+            pass
 
     if sys.platform == "darwin":
         # Strategy 1: Homebrew bash (Apple Silicon) – often newer than system bash

@@ -326,10 +326,6 @@ def _build_rg_args(rg_path: str, params: Params, *, single_threaded: bool = Fals
 def _format_cmd(params: Params, *, rg_path: str = "rg") -> str:
     """Format the equivalent ripgrep command string for display."""
     args = _build_rg_args(rg_path, params)
-    if args:
-        args[0] = args[0].replace("\\", "/")
-    if len(args) >= 2:
-        args[-1] = args[-1].replace("\\", "/")
     return shlex.join(args)
 
 
@@ -385,6 +381,33 @@ def _is_eagain(stderr: str) -> bool:
     return "os error 11" in stderr or "Resource temporarily unavailable" in stderr
 
 
+# Windows reserved DOS device names (case-insensitive, with or without extension).
+_WINDOWS_RESERVED_NAMES = {"con", "prn", "aux", "nul"} | {
+    f"com{i}" for i in range(1, 10)
+} | {
+    f"lpt{i}" for i in range(1, 10)
+}
+
+
+def _is_windows_reserved_name(path: str) -> bool:
+    """Check if any path component is a Windows reserved DOS device name.
+
+    On Windows, names like CON, PRN, AUX, NUL, COM1-COM9, LPT1-LPT9 are
+    reserved (regardless of extension). Passing such paths to ripgrep
+    causes ``ERROR_INVALID_FUNCTION`` (os error 1).
+    """
+    if not platform.system() == "Windows":
+        return False
+    normalized = os.path.normpath(path)
+    for part in normalized.split(os.sep):
+        if not part:
+            continue
+        stem = part.split(".")[0].lower()
+        if stem in _WINDOWS_RESERVED_NAMES:
+            return True
+    return False
+
+
 _RG_LINE_RE = re.compile(r"^(.*?)([:\-])(\d+)\2")
 
 
@@ -425,32 +448,8 @@ def _strip_path_prefix(lines: list[str], search_base: str) -> list[str]:
 
 
 def _normalize_output_lines(lines: list[str], output_mode: str) -> list[str]:
-    """Convert Windows path separators to Unix style in path portions of grep output."""
-    if output_mode == "files_with_matches":
-        return [line.replace("\\", "/") for line in lines]
-    if output_mode == "count_matches":
-        result: list[str] = []
-        for line in lines:
-            idx = line.rfind(":")
-            if idx > 0:
-                result.append(line[:idx].replace("\\", "/") + line[idx:])
-            else:
-                result.append(line.replace("\\", "/"))
-        return result
-    # content mode
-    result: list[str] = []
-    for line in lines:
-        if line == "--":
-            result.append(line)
-            continue
-        m = _RG_LINE_RE.match(line)
-        if m:
-            path = m.group(1).replace("\\", "/")
-            rest = line[m.end():]
-            result.append(f"{path}{m.group(2)}{m.group(3)}{m.group(2)}{rest}")
-        else:
-            result.append(line.replace("\\", "/"))
-    return result
+    """No-op passthrough (paths kept in native OS format)."""
+    return lines
 
 
 # Minimal type-to-extension mapping for common file types.
@@ -623,6 +622,18 @@ class Grep(CallableTool2[Params]):
             rg_path = self._rg_path
             assert rg_path is not None
             logger.debug("Using ripgrep binary: {rg_bin}", rg_bin=rg_path)
+
+            # Windows reserved device names (NUL, CON, etc.) cause os error 1.
+            resolved_path = os.path.expanduser(normalize_user_path(params.path))
+            if _is_windows_reserved_name(resolved_path):
+                return ToolError(
+                    message=(
+                        f"`{params.path}` is a reserved device name on Windows "
+                        f"and cannot be searched."
+                    ),
+                    brief=f"Reserved device name | {_format_cmd(params)}",
+                )
+
             args = _build_rg_args(rg_path, params, single_threaded=_retry)
 
             # Execute search as async subprocess (non-blocking, cancellable)
@@ -869,6 +880,17 @@ class Grep(CallableTool2[Params]):
                 )
 
             search_path = Path(os.path.expanduser(params.path)).resolve()
+
+            # Windows reserved device names (NUL, CON, etc.) cause os error 1.
+            if _is_windows_reserved_name(str(search_path)):
+                display_path = params.path.replace("\\", "/")
+                return ToolError(
+                    message=(
+                        f"`{display_path}` is a reserved device name on Windows "
+                        f"and cannot be searched."
+                    ),
+                    brief=f"Reserved device name | {_format_cmd(params)}",
+                )
 
             # Validate workspace
             logical_search_path = KaosPath(params.path).expanduser().canonical()

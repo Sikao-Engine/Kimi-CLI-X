@@ -168,7 +168,7 @@ def _is_ignored_by_gitignore(
     ignored = False
     for rule in rules:
         try:
-            rel_path = str(path.relative_to(rule.source_dir)).replace("\\", "/")
+            rel_path = str(path.relative_to(rule.source_dir))
         except ValueError:
             continue
         is_dir = path.is_dir()
@@ -318,13 +318,13 @@ class Glob(CallableTool2[Params]):
             dir_path = KaosPath(str(kaos_path_from_user_input(params.directory)) if params.directory else str(self._work_dir))
             dir_path = await resolve_vfs(str(dir_path), self._vfs, for_write=False)
             if not await dir_path.exists():
-                display_dir = str(dir_path).replace("\\", "/")
+                display_dir = str(dir_path)
                 return ToolError(
                     message=f"`{display_dir}` does not exist.",
                     brief=f"Directory not found: {display_dir}",
                 )
             if not await dir_path.is_dir():
-                display_dir = str(dir_path).replace("\\", "/")
+                display_dir = str(dir_path)
                 return ToolError(
                     message=f"`{display_dir}` is not a directory.",
                     brief=f"Invalid directory: {display_dir}",
@@ -371,7 +371,7 @@ class Glob(CallableTool2[Params]):
             n_bytes = 0
             truncated_by_bytes = False
             for p in matches:
-                line = str(p.relative_to(dir_path)).replace("\\", "/")
+                line = str(p.relative_to(dir_path))
                 line_bytes = len(line.encode("utf-8"))
                 separator_bytes = 1 if output_lines else 0
                 output_lines.append(line)
@@ -408,7 +408,7 @@ class Glob(CallableTool2[Params]):
             if truncated_by_bytes:
                 message += f" Output truncated to {MAX_BYTES} bytes."
 
-            display_dir = str(dir_path).replace("\\", "/")
+            display_dir = str(dir_path)
             return ToolOk(
                 output=output,
                 message=message,
