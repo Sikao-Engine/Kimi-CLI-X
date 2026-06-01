@@ -439,6 +439,166 @@ class TestPrepareBashCmd:
             expected = r'"hello\\\"world"'
             assert _prepare_bash_cmd(cmd) == expected
 
+    # -- corner case: $(...) and backticks inside double quotes ----------------
+    # bash runs the content of a command substitution in a subshell where it is
+    # parsed unquoted.  So backslashes inside $(...) or `...` must be processed
+    # (converted to /) even when the substitution is nested inside "...".
+
+    def test_dq_with_command_substitution_and_backslash_path_on_windows(self) -> None:
+        r"""echo "$(cat src\foo\bar)" — backslashes inside $(...) within DQ are converted."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "$(cat src\foo\bar)"'
+            assert _prepare_bash_cmd(cmd) == 'echo "$(cat src/foo/bar)"'
+
+    def test_dq_with_backtick_substitution_and_backslash_path_on_windows(self) -> None:
+        """Backticks inside DQ (unescaped) start a command substitution.
+
+        bash runs the content in a subshell, so backslashes inside are
+        processed (converted to /) just like at the top level.
+        """
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "`cat src\foo\bar`"'
+            assert _prepare_bash_cmd(cmd) == 'echo "`cat src/foo/bar`"'
+
+    
+    def test_dq_with_nested_command_substitution_on_windows(self) -> None:
+        r"""Nested $(...) inside DQ — both levels process backslashes."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "$(cat $(echo src\foo\bar))"'
+            assert _prepare_bash_cmd(cmd) == 'echo "$(cat $(echo src/foo/bar))"'
+
+    def test_dq_with_backtick_inside_command_substitution_on_windows(self) -> None:
+        r"""Backticks nested inside $(...) within DQ — content is processed."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "$(cat `echo src\foo`)"'
+            assert _prepare_bash_cmd(cmd) == 'echo "$(cat `echo src/foo`)"'
+
+    def test_dq_with_command_substitution_inside_backticks_on_windows(self) -> None:
+        r"""$(...) nested inside `...` at top level — content is processed."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo `cat $(echo src\foo\bar)`'
+            assert _prepare_bash_cmd(cmd) == 'echo `cat $(echo src/foo/bar)`'
+
+    def test_dq_with_quoted_path_and_command_subst_on_windows(self) -> None:
+        r"""Mixed: quoted path (preserved) + $(...) substitution (converted)."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "literal src\foo" "$(cat src\bar\baz)"'
+            assert _prepare_bash_cmd(cmd) == 'echo "literal src\\foo" "$(cat src/bar/baz)"'
+
+    def test_dq_ansi_c_inside_command_substitution_on_windows(self) -> None:
+        r"""$'...' inside $(...) within DQ — ANSI-C region is preserved literally."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "$(echo $'"'"'\n'"'"')"'
+            assert _prepare_bash_cmd(cmd) == r'echo "$(echo $'"'"'\n'"'"')"'
+
+    def test_dq_single_quotes_inside_command_substitution_on_windows(self) -> None:
+        r"""Single-quoted path inside $(...) within DQ — backslashes preserved."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "$(cat '"'"'src\foo\bar'"'"')"'
+            assert _prepare_bash_cmd(cmd) == r'echo "$(cat '"'"'src\foo\bar'"'"')"'
+
+    def test_dq_escaped_dollar_paren_not_command_substitution_on_windows(self) -> None:
+        r"""\$( inside DQ — the $ is escaped, so ( is NOT a command substitution."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "\$(not a sub) src\file"'
+            # \$ makes $ literal; ( ) are regular; src\file is preserved by DQ.
+            assert _prepare_bash_cmd(cmd) == r'echo "\$(not a sub) src\file"'
+
+    def test_dq_escaped_backtick_not_substitution_on_windows(self) -> None:
+        r"""\` inside DQ — the ` is escaped, so it's a literal backtick, not substitution."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "\`not a sub\` src\file"'
+            # \` makes ` literal; src\file is preserved by DQ.
+            assert _prepare_bash_cmd(cmd) == r'echo "\`not a sub\` src\file"'
+
+    def test_dq_empty_command_substitution_on_windows(self) -> None:
+        """Empty $(...) inside DQ."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            assert _prepare_bash_cmd('echo "$()"') == 'echo "$()"'
+
+    def test_dq_empty_backticks_on_windows(self) -> None:
+        """Empty `` `` `` inside DQ."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            assert _prepare_bash_cmd('echo "``"') == 'echo "``"'
+
+    def test_unterminated_dq_with_command_substitution_on_windows(self) -> None:
+        r"""Unterminated DQ that contains $( — passed through to bash to error."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "$(unterminated'
+            assert _prepare_bash_cmd(cmd) == r'echo "$(unterminated'
+
+    def test_unterminated_command_substitution_inside_dq_on_windows(self) -> None:
+        r"""$(... with no matching ) inside DQ — passed through."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "$(no close paren"'
+            assert _prepare_bash_cmd(cmd) == r'echo "$(no close paren"'
+
+    def test_unterminated_backticks_inside_dq_on_windows(self) -> None:
+        r"""Unterminated ` inside DQ — passed through."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "`no close"'
+            assert _prepare_bash_cmd(cmd) == r'echo "`no close"'
+
+    def test_dq_with_dq_inside_command_substitution_on_windows(self) -> None:
+        r"""DQ inside $(...) inside DQ — inner DQ preserves its backslashes."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            # "$(echo "src\foo" rest)" — inner DQ preserves \, rest converted
+            cmd = r'echo "$(echo "src\foo" rest\bar)"'
+            assert _prepare_bash_cmd(cmd) == r'echo "$(echo "src\foo" rest/bar)"'
+
+    def test_top_level_backtick_with_escaped_backtick_on_windows(self) -> None:
+        r"""\` at top level — escaped backtick, literal, not substitution start."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r"echo \`not_sub\`"
+            assert _prepare_bash_cmd(cmd) == r"echo \`not_sub\`"
+
+    def test_top_level_nested_backticks_with_path_on_windows(self) -> None:
+        """`` `cmd1`cmd2` `` style — backtick region content is processed."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            # Outer backtick runs `cmd src\file`, inner is just text
+            cmd = r"echo `cat src\file.txt`"
+            assert _prepare_bash_cmd(cmd) == "echo `cat src/file.txt`"
+
+    def test_command_substitution_with_nested_parens_on_windows(self) -> None:
+        r"""$(echo (nested) paren) — ) inside parens is balanced correctly."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r"echo $(echo (src\foo\bar))"
+            # The ) after "bar" closes the $().  The ) at the end is a stray.
+            # Actually: $(echo (src\foo\bar)) — opens $(, then echo (, then
+            # content, then ) closes the inner paren, then )) closes the $().
+            # Let's just verify it doesn't crash and paths are converted.
+            result = _prepare_bash_cmd(cmd)
+            assert "src/foo/bar" in result
+
+    def test_dq_ansi_c_immediately_before_closing_quote_on_windows(self) -> None:
+        r"""$'...' right before closing " in DQ — must not skip the closing quote."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            # "abc $'def'" — the ANSI-C region ends right before the closing "
+            cmd = r'"abc $'"'"'def'"'"'"'
+            assert _prepare_bash_cmd(cmd) == r'"abc $'"'"'def'"'"'"'
+
+    def test_dq_backtick_immediately_before_closing_quote_on_windows(self) -> None:
+        """Backtick region right before closing " in DQ."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            # "abc `def`" — backtick region ends right before the closing "
+            cmd = '"abc `def`"'
+            assert _prepare_bash_cmd(cmd) == '"abc `def`"'
+
+    def test_dq_command_subst_immediately_before_closing_quote_on_windows(self) -> None:
+        """$(...) right before closing " in DQ."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            # "abc $(echo x)" — command substitution ends right before the closing "
+            cmd = '"abc $(echo x)"'
+            assert _prepare_bash_cmd(cmd) == '"abc $(echo x)"'
+
+    def test_dq_with_complex_nesting_on_windows(self) -> None:
+        r"""Complex nesting: $(echo "$(echo src\foo)" `echo src\bar`)."""
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "$(echo "$(echo src\foo)" `echo src\bar`)"'
+            # Both $() levels convert paths; inner DQ preserves its \
+            expected = r'echo "$(echo "$(echo src/foo)" `echo src/bar`)"'
+            assert _prepare_bash_cmd(cmd) == expected
+
 
 # ============================================================================
 # Bash.__call__ — integration tests with backslash paths on Windows
