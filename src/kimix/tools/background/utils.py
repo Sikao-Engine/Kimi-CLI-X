@@ -158,10 +158,10 @@ class BackgroundStream:
 
 
 def generate_task_id(session: Session, kind: str, name: str | None = None) -> str:
-    base_id = kind
     if name:
         base_id = f"{kind}_{name}"
-
+    else:
+        base_id = kind
     data = _get_or_add_task_data(session)
     if base_id not in data.task_names:
         data.task_names[base_id] = 0

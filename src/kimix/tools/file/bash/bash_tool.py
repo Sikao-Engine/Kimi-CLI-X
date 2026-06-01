@@ -1,6 +1,7 @@
 """Bash tool that executes commands via the system bash executable."""
 
 
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -27,6 +28,10 @@ _BASH_METACHARACTERS = frozenset("()|;&<>$\"`'*?[]{}~!#=% \t\n\r")
 # because \$, \` inside "..." are literal (the $ / ` is escaped, not triggering
 # variable expansion or command substitution).
 _DQ_ESCAPED = frozenset(('"', '\\', '$', '`'))
+
+# Precompiled regex for finding the next special character in unquoted mode.
+# Matches backslash, single quote, double quote, dollar, or backtick.
+_UNQUOTED_SPECIAL_RE = re.compile(r'[\\\'"$`]')
 
 
 def _find_ansi_c_end(cmd: str, start: int) -> int:
@@ -99,6 +104,12 @@ def _find_matching_paren(cmd: str, open_pos: int) -> int:
         elif c == "$" and i + 1 < length and cmd[i + 1] == "(":
             depth += 1
             i += 2
+        elif c == "$" and i + 1 < length and cmd[i + 1] == "'":
+            # $'...' ANSI-C quoted region — skip to its closing '
+            end = _find_ansi_c_end(cmd, i + 2)
+            if end == -1:
+                return -1
+            i = end
         elif c == ")":
             depth -= 1
             if depth == 0:
@@ -167,27 +178,17 @@ def _process_unquoted(cmd: str) -> str:
 
     while i < length:
         # ---- find the next special character ----
-        # Use C-accelerated str.find (5 calls) to bulk-skip non-special chars.
-        nxt = length
-        pos = cmd.find("\\", i)
-        if pos != -1:
-            nxt = pos
-        pos = cmd.find("'", i)
-        if pos != -1 and pos < nxt:
-            nxt = pos
-        pos = cmd.find('"', i)
-        if pos != -1 and pos < nxt:
-            nxt = pos
-        pos = cmd.find('$', i)
-        if pos != -1 and pos < nxt:
-            nxt = pos
-        pos = cmd.find('`', i)
-        if pos != -1 and pos < nxt:
-            nxt = pos
-
-        if nxt > i:
-            result.append(cmd[i:nxt])
-            i = nxt
+        # Use a single regex search (C-accelerated) to bulk-skip non-special chars.
+        m = _UNQUOTED_SPECIAL_RE.search(cmd, i)
+        if m:
+            nxt = m.start()
+            if nxt > i:
+                result.append(cmd[i:nxt])
+                i = nxt
+        else:
+            # No more special characters — append the remaining suffix and finish.
+            result.append(cmd[i:])
+            break
 
         if i >= length:
             break
@@ -218,6 +219,18 @@ def _process_unquoted(cmd: str) -> str:
             j = i + 1
             chunk_start = i
             while j < dq_end:
+                # Bulk-skip to the next interesting character inside DQ:
+                # backslash, dollar, or backtick.
+                m2 = _UNQUOTED_SPECIAL_RE.search(cmd, j, dq_end)
+                if m2:
+                    nxt2 = m2.start()
+                    if nxt2 > j:
+                        j = nxt2
+                else:
+                    # No more special chars inside DQ — rest is verbatim
+                    j = dq_end
+                    break
+
                 c = cmd[j]
                 if c == "\\" and j + 1 < dq_end and cmd[j + 1] in _DQ_ESCAPED:
                     # \X inside DQ: X is escaped.  Skip the pair; it will
@@ -226,8 +239,10 @@ def _process_unquoted(cmd: str) -> str:
                 elif c == "$" and j + 1 < dq_end and cmd[j + 1] == "(":
                     # $(...) command substitution — process content
                     paren_end = _find_matching_paren(cmd, j + 1)
-                    # paren_end must be < dq_end (we're inside the DQ)
-                    assert paren_end != -1 and paren_end < dq_end
+                    if paren_end == -1 or paren_end >= dq_end:
+                        # Unterminated or mismatched — treat rest as verbatim
+                        j = dq_end
+                        break
                     result.append(cmd[chunk_start:j])
                     result.append("$(")
                     result.append(_process_unquoted(cmd[j + 2 : paren_end]))
@@ -238,14 +253,18 @@ def _process_unquoted(cmd: str) -> str:
                     # $'...' ANSI-C region — skip through it (copied
                     # verbatim as part of the next chunk).
                     ac_end = _find_ansi_c_end(cmd, j + 2)
-                    # ac_end must be <= dq_end
+                    if ac_end == -1 or ac_end > dq_end:
+                        # Unterminated or extends beyond DQ — treat rest as verbatim
+                        j = dq_end
+                        break
                     j = ac_end
                 elif c == "`":
                     # Backtick command substitution — process content
                     bt_end = _find_backtick_end(cmd, j + 1)
-                    # bt_end is the index AFTER the closing `; the closing
-                    # ` is at bt_end - 1.  bt_end must be <= dq_end.
-                    assert bt_end != -1 and bt_end <= dq_end
+                    if bt_end == -1 or bt_end > dq_end:
+                        # Unterminated or extends beyond DQ — treat rest as verbatim
+                        j = dq_end
+                        break
                     result.append(cmd[chunk_start:j])
                     result.append("`")
                     result.append(_process_unquoted(cmd[j + 1 : bt_end - 1]))
@@ -253,7 +272,8 @@ def _process_unquoted(cmd: str) -> str:
                     j = bt_end
                     chunk_start = j
                 else:
-                    j += 1  # regular char (or lone $, \)
+                    # Should not reach here — char is not one we handle in DQ
+                    j += 1
             # Emit the final chunk (up to and including the closing ")
             result.append(cmd[chunk_start:dq_end])
             i = dq_end

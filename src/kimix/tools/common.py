@@ -473,7 +473,7 @@ class ProcessTask:
         from kimix.tools.background.utils import BackgroundStream, generate_task_id, add_task
         self._stream = BackgroundStream()
         # Generate a task ID based on the executable name
-        self._task_id = generate_task_id(session, kind, name or Path(self.path).stem)
+        self._task_id = generate_task_id(session, kind, name)
         await self._stream.start(self._run_process_bg,
                            self._stop_function, self._input_function)
         # Register the task
