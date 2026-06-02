@@ -529,6 +529,12 @@ def _format_tool_args(name: str, args: str | None) -> str | None:
                 return ", ".join(_collect("url", "output_path"))
             case "Agent":
                 return ", ".join(_collect("prompt", "session_id"))
+            case "AgentList":
+                return ""
+            case "AgentClose":
+                return ", ".join(_collect("session_id"))
+            case "AskParent":
+                return ", ".join(_collect("question", "context"))
             case _:
                 return orjson.dumps(parsed).decode("utf-8")
     except TypeError:
