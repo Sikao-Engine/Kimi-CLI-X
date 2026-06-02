@@ -7,12 +7,11 @@
       "kimix.tools.py:Python",
       "kimix.tools.file.input:Input",
       "kimix.tools.background:TaskOutput",
-      "kimi_cli.tools.file:ReadFile",
       "kimi_cli.tools.file:Glob",
       "kimi_cli.tools.file:Grep",
       "kimix.tools.web.fetch_url:FetchURL",
-      "kimi_cli.tools.file:WriteFile",
-      "kimi_cli.tools.file:EditFile"
+      "kimi_cli.tools.file:HashLine",
+      "kimi_cli.tools.file:WriteFile"
     ]
   }
 }

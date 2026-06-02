@@ -43,6 +43,7 @@ from kimi_cli.tools.file.read import ReadFile
 from kimi_cli.tools.file.read_media import ReadMediaFile
 from kimi_cli.tools.file.replace import EditFile
 from kimi_cli.tools.file.write import WriteFile
+from kimi_cli.tools.file.hash_line import HashLine
 from kimi_cli.tools.shell import Shell
 from kimi_cli.tools.think import Think
 from kimi_cli.tools.step_mem import StepMemory
@@ -325,6 +326,12 @@ def edit_file_tool(runtime: Runtime, approval: Approval, session: Session) -> Ge
     """Create a EditFile tool instance."""
     with tool_call_context("EditFile"):
         yield EditFile(runtime, approval, session)
+
+
+@pytest.fixture
+def hash_line_tool(runtime: Runtime, session: Session) -> HashLine:
+    """Create a HashLine tool instance."""
+    return HashLine(runtime, session)
 
 
 @pytest.fixture

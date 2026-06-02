@@ -9,11 +9,10 @@
       "kimix.tools.background:TaskOutput",
       "kimi_cli.tools.todo:SetTodoList",
       "kimi_cli.tools.step_mem:StepMemory",
+      "kimi_cli.tools.file:HashLine",
       "kimi_cli.tools.file:WriteFile",
-      "kimi_cli.tools.file:ReadFile",
       "kimi_cli.tools.file:Glob",
       "kimi_cli.tools.file:Grep",
-      "kimi_cli.tools.file:EditFile",
       "kimix.tools.web.fetch_url:FetchURL"
     ]
   }

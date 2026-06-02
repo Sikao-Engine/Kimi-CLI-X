@@ -39,6 +39,7 @@ dependencies = [
     "orjson>=3.0.0",
     "rapidfuzz>=3.0.0",
     "tiktoken>=0.7.0",
+    "xxhash>=3.0.0",
 ]
 
 [dependency-groups]
