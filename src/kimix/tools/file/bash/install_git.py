@@ -29,7 +29,7 @@ from pathlib import Path
 GIT_VERSION: str = "2.54.0"
 """Git for Windows version to install when using the direct-download strategy."""
 
-INSTALL_DIR: str | None = None
+INSTALL_DIR = Path.home() / ".kimi" / "git"
 """Custom install directory.
    ``None`` means use the installer default (usually ``C:\\Program Files\\Git``).
    Example: ``r"D:\\Program Files\\Git"``
