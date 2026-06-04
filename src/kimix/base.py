@@ -533,8 +533,21 @@ def _format_tool_args(name: str, args: str | None) -> str | None:
                 return ""
             case "AgentClose":
                 return ", ".join(_collect("session_id"))
-            case "Note":
-                return ", ".join(_collect("content", hide={"content"}))
+            case "WritePlan":
+                return ", ".join(_collect("content", "mode", hide={"content"}))
+            case "ReadPlan":
+                return ", ".join(_collect("line_offset", "n_lines", "max_char", "char_offset"))
+            case "EditPlan":
+                parts = []
+                if "edit" in parsed:
+                    edit = parsed["edit"]
+                    if edit is None:
+                        parts.append("edit=None")
+                    elif isinstance(edit, list):
+                        parts.append(f"edit=[{len(edit)} edit(s)]")
+                    else:
+                        parts.append("edit=[1 edit]")
+                return ", ".join(parts)
             case "AskParent":
                 return ", ".join(_collect("question", "context"))
             case _:

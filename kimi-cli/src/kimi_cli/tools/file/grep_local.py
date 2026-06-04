@@ -16,7 +16,7 @@ import tempfile
 import zipfile
 from functools import lru_cache
 from pathlib import Path
-from typing import override
+from typing import Literal, override
 
 from kaos.path import KaosPath
 
@@ -35,7 +35,7 @@ from kosong.tooling import (
     FIELD_ALIASES_FILE,
     FIELD_ALIASES_WEB,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import kimi_cli
 from kimi_cli.share import get_share_dir
@@ -47,6 +47,43 @@ from kimi_cli.utils.sensitive import is_sensitive_file, sensitive_file_warning
 from kimi_cli.soul.agent import Runtime
 from kimi_cli.vfs import VFS
 import concurrent.futures
+
+# Fuzzy output_mode map — maps common synonyms to canonical values
+_OUTPUT_MODE_MAP: dict[str, Literal["files_with_matches", "count_matches", "content"]] = {
+    # files_with_matches
+    "files_with_matches": "files_with_matches",
+    "fileswithmatches": "files_with_matches",
+    "files_with_match": "files_with_matches",
+    "files": "files_with_matches",
+    "file": "files_with_matches",
+    "filenames": "files_with_matches",
+    "names_only": "files_with_matches",
+    "files_only": "files_with_matches",
+    "list": "files_with_matches",
+    "matching_files": "files_with_matches",
+    # count_matches
+    "count_matches": "count_matches",
+    "countmatches": "count_matches",
+    "count": "count_matches",
+    "counts": "count_matches",
+    "match_count": "count_matches",
+    "num_matches": "count_matches",
+    "stats": "count_matches",
+    "summary": "count_matches",
+    "count_match": "count_matches",
+    # content
+    "content": "content",
+    "full": "content",
+    "full_content": "content",
+    "lines": "content",
+    "matched_lines": "content",
+    "matching_lines": "content",
+    "context": "content",
+    "matches": "content",
+    "results": "content",
+}
+
+
 class Params(BaseModel):
     pattern: str = Field(description="Regex pattern.")
     path: str = Field(
@@ -57,10 +94,22 @@ class Params(BaseModel):
         description="Glob filter.",
         default=None,
     )
-    output_mode: str = Field(
-        description="Output format.",
+    output_mode: Literal["files_with_matches", "count_matches", "content"] = Field(
+        description="Output format: 'files_with_matches', 'count_matches', or 'content'.",
         default="files_with_matches",
     )
+
+    @field_validator("output_mode", mode="before")
+    @classmethod
+    def _validate_output_mode(cls, v: str) -> str:
+        normalized = v.strip().lower().replace("-", "_")
+        canonical = _OUTPUT_MODE_MAP.get(normalized)
+        if canonical is None:
+            raise ValueError(
+                f"Invalid output_mode '{v}'. Must be 'files_with_matches', "
+                "'count_matches', or 'content' (or a known synonym)."
+            )
+        return canonical
     before_context: int | None = Field(
         alias="-B",
         description="Lines before match (content mode only).",

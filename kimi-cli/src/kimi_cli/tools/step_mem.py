@@ -14,17 +14,59 @@ from typing import Any, Literal, override
 from kimi_cli.session import Session
 
 from kosong.tooling import CallableTool2, ToolError, ToolOk, ToolReturnValue
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from kimi_cli.soul.agent import Runtime
 from kimi_cli.tools.reason import ToolCallReason
 from kimi_cli.utils.io import atomic_json_write
+
+# Fuzzy action map — maps common synonyms to canonical values
+_ACTION_MAP: dict[str, Literal["save", "load"]] = {
+    # save synonyms
+    "save": "save",
+    "store": "save",
+    "write": "save",
+    "put": "save",
+    "create": "save",
+    "add": "save",
+    "record": "save",
+    "persist": "save",
+    "set": "save",
+    "update": "save",
+    "insert": "save",
+    # load synonyms
+    "load": "load",
+    "read": "load",
+    "get": "load",
+    "retrieve": "load",
+    "fetch": "load",
+    "query": "load",
+    "search": "load",
+    "recall": "load",
+    "restore": "load",
+    "find": "load",
+    "lookup": "load",
+    "list": "load",
+    "show": "load",
+    "view": "load",
+}
 
 
 class Params(BaseModel):
     action: Literal["save", "load"] = Field(
         description='Action to perform: "save" to record a step, "load" to retrieve history.'
     )
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _validate_action(cls, v: str) -> str:
+        normalized = v.strip().lower().replace("-", "_")
+        canonical = _ACTION_MAP.get(normalized)
+        if canonical is None:
+            raise ValueError(
+                f"Invalid action '{v}'. Must be 'save' or 'load' (or a known synonym)."
+            )
+        return canonical
     step: str | None = Field(
         default=None,
         description="Required for save: description of what was done. Optional for load: filter history to entries whose step text contains this value.",

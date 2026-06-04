@@ -3,7 +3,7 @@ from typing import Literal, override
 
 from kaos.path import KaosPath
 from kosong.tooling import CallableTool2, DisplayBlock, ToolError, ToolReturnValue
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from kimi_cli.session import Session
 from kimi_cli.soul.agent import Runtime
@@ -19,6 +19,32 @@ from .utils import resolve_vfs
 
 _BASE_DESCRIPTION = "Write content to a file."
 
+# Fuzzy mode map — maps common synonyms to canonical values
+_MODE_MAP: dict[str, Literal["overwrite", "append"]] = {
+    # overwrite synonyms
+    "overwrite": "overwrite",
+    "over_write": "overwrite",
+    "over-write": "overwrite",
+    "replace": "overwrite",
+    "write": "overwrite",
+    "create": "overwrite",
+    "new": "overwrite",
+    "truncate": "overwrite",
+    "rewrite": "overwrite",
+    "set": "overwrite",
+    "put": "overwrite",
+    # append synonyms
+    "append": "append",
+    "add": "append",
+    "concat": "append",
+    "concatenate": "append",
+    "extend": "append",
+    "attach": "append",
+    "insert": "append",
+    "prepend": "append",
+    "after": "append",
+}
+
 
 class Params(BaseModel):
     path: str = Field(
@@ -29,6 +55,17 @@ class Params(BaseModel):
         description="Write mode: overwrite or append.",
         default="overwrite",
     )
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _validate_mode(cls, v: str) -> str:
+        normalized = v.strip().lower().replace("-", "_")
+        canonical = _MODE_MAP.get(normalized)
+        if canonical is None:
+            raise ValueError(
+                f"Invalid mode '{v}'. Must be 'overwrite' or 'append' (or a known synonym)."
+            )
+        return canonical
 
 
 class WriteFile(CallableTool2[Params]):
@@ -123,17 +160,6 @@ class WriteFile(CallableTool2[Params]):
                 return ToolError(
                     message=f"{'[out of work-dir] ' if _outside else ''}Failed to create parent directory for {display_p}: {e}",
                     brief="Parent directory not found",
-                )
-
-            # Validate mode parameter
-            if params.mode not in ["overwrite", "append"]:
-                return ToolError(
-                    message=(
-                        f"{'[out of work-dir] ' if _outside else ''}Invalid write mode: `{params.mode}`. "
-                        "Mode must be either `overwrite` or `append`."
-                        f" Path: {display_path}"
-                    ),
-                    brief="Invalid write mode",
                 )
 
             old_text = ""

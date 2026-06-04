@@ -136,22 +136,22 @@ def prompt_path(path: Path, split_word: Optional[str] = None, session: Session |
 
 
 async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md") -> None:
-    from kimix.tools.note import _enable_note
+    from kimix.tools.note import _enable_plan
 
     plan_file = Path(plan_file)
     if plan_file.is_file():
         plan_file.unlink()
 
-    _enable_note.value = True
+    _enable_plan.value = True
     planner_session: Session | None = None
 
     try:
         planner_session = await _create_session_async(agent_type=SystemPromptType.TodoMaker, agent_file='agent_planner.json')
-        planner_session.get_custom_data()["note_writing_path"] = plan_file
+        planner_session.get_custom_data()["plan_writing_path"] = plan_file
 
         reminder = (
             "read the following requirement carefully and generate a comprehensive plan. "
-            f"Save the complete plan to a file using the Note tool.\n\n"
+            f"Save the complete plan to a file using the WritePlan tool.\n\n"
             f"Requirement:\n{requirement.strip()}"
         )
 
@@ -177,7 +177,7 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
                 if attempt < max_plan_attempts - 1:
                     reminder = (
                         "The plan file was not generated. "
-                        "Please generate the plan and save it using the Note tool.\n\n"
+                        "Please generate the plan and save it using the WritePlan tool.\n\n"
                         f"Requirement:\n{requirement.strip()}"
                     )
             except KeyboardInterrupt:
@@ -193,12 +193,6 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
                 if attempt == max_plan_attempts - 1:
                     raise
                 await asyncio.sleep(1)
-
-        if planner_session:
-            await close_session_async(planner_session)
-            planner_session = None
-        _enable_note.value = False
-
         if not plan_generated:
             base._stream.colorful_print_word(
                 "Plan generation failed: plan file not found.",
@@ -208,27 +202,82 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
             )
             return
 
+        def _open_plan_file(filepath: Path) -> None:
+            """Open the plan file with the system default application."""
+            try:
+                if sys.platform == "win32":
+                    os.startfile(str(filepath))
+                elif sys.platform == "darwin":
+                    subprocess.run(["open", str(filepath)])
+                else:
+                    subprocess.run(["xdg-open", str(filepath)])
+            except Exception:
+                pass
+
         base._stream.colorful_print_word(
             f"Plan generated: {plan_file.absolute()}\n",
             fg=Color.BRIGHT_GREEN,
             styles=[Style.BOLD],
             require_new_line=True,
         )
+        _open_plan_file(plan_file)
 
-        try:
-            if sys.platform == "win32":
-                os.startfile(str(plan_file))
-            elif sys.platform == "darwin":
-                subprocess.run(["open", str(plan_file)])
-            else:
-                subprocess.run(["xdg-open", str(plan_file)])
-        except Exception:
-            pass
+        # Review loop: let the user approve or request revisions
+        execute_plan = True
+        while True:
+            user_input = await asyncio.to_thread(
+                input, "Do you want to implement the plan? (y/n): "
+            )
+            if user_input.strip().lower() == "y":
+                break
 
-        user_input = await asyncio.to_thread(
-            input, "Do you want to implement the plan? (y/n): "
-        )
-        if user_input.strip().lower() != "y":
+            # User wants to revise the plan — get feedback and loop back to planner
+            feedback = await asyncio.to_thread(
+                input, "Please describe the changes you want (/quit to give up): "
+            )
+            feedback = feedback.strip()
+            if not feedback:
+                continue
+            if feedback.lower() == '/quit':
+                execute_plan = False
+                break
+            revision_reminder = (
+                "The user reviewed the plan and wants the following changes:\n\n"
+                f"{feedback.strip()}\n\n"
+                "Please update the plan file accordingly using the WritePlan or EditPlan tools."
+            )
+            try:
+                base._stream.colorful_print_word(
+                    "Revising plan...\n",
+                    fg=Color.BRIGHT_CYAN,
+                    require_new_line=True,
+                )
+                async for message in planner_session.prompt(revision_reminder):
+                    print_agent_json(message, planner_session, None)
+                base._stream.print_word("\n", require_new_line=True)
+
+                # Re-open the updated plan file for review
+                if plan_file.exists():
+                    _open_plan_file(plan_file)
+            except KeyboardInterrupt:
+                if planner_session:
+                    planner_session.cancel()
+                return
+            except Exception as exc:
+                base._stream.colorful_print_word(
+                    f"Revision failed: {exc}",
+                    fg=Color.BRIGHT_RED,
+                    styles=[Style.BOLD],
+                    require_new_line=True,
+                )
+                # Continue the loop so the user can try again
+
+        # User approved — close planner session, then proceed to implementation
+        if planner_session:
+            await close_session_async(planner_session)
+            planner_session = None
+        _enable_plan.value = False
+        if not execute_plan:
             return
 
         if not plan_file.exists():
@@ -255,7 +304,7 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
             require_new_line=True,
         )
     finally:
-        _enable_note.value = False
+        _enable_plan.value = False
         if planner_session:
             await close_session_async(planner_session)
 

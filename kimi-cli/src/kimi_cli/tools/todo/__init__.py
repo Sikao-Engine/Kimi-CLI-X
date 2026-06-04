@@ -12,9 +12,97 @@ from kimi_cli.tools.utils import load_desc
 from kimi_cli.utils.logging import logger
 
 
+# Jumbo fuzzy status map — maps common synonyms to canonical values
+_STATUS_MAP: dict[str, Literal["pending", "in_progress", "done"]] = {
+    # pending
+    "pending": "pending",
+    "wait": "pending",
+    "waiting": "pending",
+    "todo": "pending",
+    "to_do": "pending",
+    "to-do": "pending",
+    "not_started": "pending",
+    "notstarted": "pending",
+    "not started": "pending",
+    "backlog": "pending",
+    "queued": "pending",
+    "unstarted": "pending",
+    "open": "pending",
+    "new": "pending",
+    "planned": "pending",
+    "scheduled": "pending",
+    "upcoming": "pending",
+    "ready": "pending",
+    "idle": "pending",
+    # in_progress
+    "in_progress": "in_progress",
+    "inprogress": "in_progress",
+    "in progress": "in_progress",
+    "started": "in_progress",
+    "start": "in_progress",
+    "active": "in_progress",
+    "ongoing": "in_progress",
+    "working": "in_progress",
+    "work": "in_progress",
+    "doing": "in_progress",
+    "underway": "in_progress",
+    "under way": "in_progress",
+    "wip": "in_progress",
+    "current": "in_progress",
+    "progress": "in_progress",
+    "busy": "in_progress",
+    "developing": "in_progress",
+    "partial": "in_progress",
+    "partially_done": "in_progress",
+    "partially done": "in_progress",
+    # done
+    "done": "done",
+    "completed": "done",
+    "complete": "done",
+    "finished": "done",
+    "finish": "done",
+    "resolved": "done",
+    "closed": "done",
+    "close": "done",
+    "verified": "done",
+    "approved": "done",
+    "ok": "done",
+    "yes": "done",
+    "success": "done",
+    "successful": "done",
+    "passed": "done",
+    "fixed": "done",
+    "shipped": "done",
+    "delivered": "done",
+    "archived": "done",
+    "merged": "done",
+    "deployed": "done",
+    "released": "done",
+    "published": "done",
+    "live": "done",
+    "accepted": "done",
+    "confirmed": "done",
+    "finalized": "done",
+    "finalised": "done",
+    "ready_for_review": "done",
+    "ready for review": "done",
+}
+
+
 class Todo(BaseModel):
     title: str = Field(description="Title", min_length=1, max_length=65536)
     status: Literal["pending", "in_progress", "done"] = Field(description="Status")
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _validate_status(cls, v: str) -> str:
+        normalized = v.strip().lower().replace("-", "_")
+        canonical = _STATUS_MAP.get(normalized)
+        if canonical is None:
+            raise ValueError(
+                f"Invalid status '{v}'. Must be one of: pending, in_progress, done (or a known synonym)."
+            )
+        return canonical
 
     @field_validator("title")
     @classmethod

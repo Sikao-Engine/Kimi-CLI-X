@@ -11,6 +11,7 @@ from inline_snapshot import snapshot
 
 from kimi_cli.tools.file.grep_local import Grep, Params, _build_rg_args, _strip_path_prefix
 from kimi_cli.tools.utils import DEFAULT_MAX_CHARS
+from pydantic import ValidationError
 
 
 @pytest.fixture
@@ -1443,6 +1444,122 @@ async def test_grep_outside_work_dir_has_warning(grep_tool: Grep):
         )
         assert not result.is_error
         assert "[out of work-dir]" in result.message
+
+
+# ============================================================================
+# Fuzzy output_mode matching tests
+# ============================================================================
+
+
+class TestGrepFuzzyOutputMode:
+    """Test fuzzy matching for the output_mode field."""
+
+    # ── files_with_matches synonyms ──
+
+    @pytest.mark.parametrize("synonym", [
+        "files", "file", "filenames", "names_only", "files_only",
+        "list", "matching_files", "fileswithmatches", "files_with_match",
+    ])
+    async def test_fuzzy_files_with_matches_synonyms(
+        self, grep_tool: Grep, temp_test_files, synonym: str
+    ):
+        """All files_with_matches synonyms should be accepted."""
+        temp_dir, _ = temp_test_files
+        result = await grep_tool(
+            Params.model_validate({
+                "pattern": "hello",
+                "path": temp_dir,
+                "output_mode": synonym,
+                "-i": True,
+            })
+        )
+        assert not result.is_error
+        assert "test1.py" in result.output
+
+    # ── count_matches synonyms ──
+
+    @pytest.mark.parametrize("synonym", [
+        "count", "counts", "match_count", "num_matches", "stats",
+        "summary", "count_match", "countmatches",
+    ])
+    async def test_fuzzy_count_matches_synonyms(
+        self, grep_tool: Grep, temp_test_files, synonym: str
+    ):
+        """All count_matches synonyms should be accepted."""
+        temp_dir, _ = temp_test_files
+        result = await grep_tool(
+            Params.model_validate({
+                "pattern": "hello",
+                "path": temp_dir,
+                "output_mode": synonym,
+                "-i": True,
+            })
+        )
+        assert not result.is_error
+        assert "Found" in result.message
+
+    # ── content synonyms ──
+
+    @pytest.mark.parametrize("synonym", [
+        "full", "full_content", "lines", "matched_lines", "matching_lines",
+        "context", "matches", "results",
+    ])
+    async def test_fuzzy_content_synonyms(
+        self, grep_tool: Grep, temp_test_files, synonym: str
+    ):
+        """All content synonyms should be accepted."""
+        temp_dir, _ = temp_test_files
+        result = await grep_tool(
+            Params.model_validate({
+                "pattern": "hello",
+                "path": temp_dir,
+                "output_mode": synonym,
+                "-i": True,
+            })
+        )
+        assert not result.is_error
+        assert "hello" in result.output.lower()
+
+    # ── normalisation ──
+
+    async def test_fuzzy_output_mode_case_insensitive(self):
+        """output_mode should be case-insensitive."""
+        params = Params.model_validate({
+            "pattern": "test",
+            "path": ".",
+            "output_mode": "FILES_WITH_MATCHES",
+        })
+        assert params.output_mode == "files_with_matches"
+
+    async def test_fuzzy_output_mode_normalizes_spaces_and_hyphens(self):
+        """output_mode strips whitespace and normalizes hyphens."""
+        # "files-with-matches" → "files_with_matches" via replace("-", "_")
+        params = Params.model_validate({
+            "pattern": "test",
+            "path": ".",
+            "output_mode": "  files-with-matches  ",
+        })
+        assert params.output_mode == "files_with_matches"
+
+    # ── invalid output_modes ──
+
+    async def test_fuzzy_output_mode_rejects_unknown(self):
+        """Completely unknown output_modes should still raise ValidationError."""
+        with pytest.raises(ValidationError):
+            Params.model_validate({
+                "pattern": "test",
+                "path": ".",
+                "output_mode": "unknown_mode",
+            })
+
+    async def test_fuzzy_output_mode_rejects_empty(self):
+        """Empty output_mode should still raise ValidationError."""
+        with pytest.raises(ValidationError):
+            Params.model_validate({
+                "pattern": "test",
+                "path": ".",
+                "output_mode": "",
+            })
 
 
 @pytest.mark.asyncio
