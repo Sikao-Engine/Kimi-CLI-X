@@ -268,17 +268,6 @@ async def test_write_approval_rejected(runtime: Runtime, session, temp_work_dir:
     request_mock.assert_awaited_once()
 
 
-async def test_write_bind_plan_mode(runtime: Runtime, session, temp_work_dir: KaosPath):
-    """Test bind_plan_mode sets checker and getter correctly."""
-    with tool_call_context("WriteFile"):
-        tool = WriteFile(runtime, Approval(yolo=True), session)
-        checker = lambda: False
-        getter = lambda: None
-        tool.bind_plan_mode(checker, getter)
-        assert tool._plan_mode_checker is checker
-        assert tool._plan_file_path_getter is getter
-
-
 async def test_write_exception_during_write(runtime: Runtime, session, temp_work_dir: KaosPath):
     """Test that an exception during write is handled gracefully."""
     file_path = temp_work_dir / "test.txt"

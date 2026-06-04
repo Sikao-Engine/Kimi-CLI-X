@@ -211,12 +211,15 @@ async def test_delete_session_not_found(client: httpx.AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_session_status(client: httpx.AsyncClient) -> None:
+    create_resp = await client.post("/session", json={"title": "Status Test"})
+    assert create_resp.status_code == 200
+    session_id = create_resp.json()["id"]
     with patch.object(
         session_manager,
         "get_session_status",
         wraps=session_manager.get_session_status,
     ) as mock_status:
-        resp = await client.get("/session/status")
+        resp = await client.get(f"/session/{session_id}/status")
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, dict)
@@ -495,7 +498,7 @@ async def test_full_session_lifecycle(client: httpx.AsyncClient) -> None:
     _log_result("test_full_session_lifecycle_list", list_resp.status_code, list_resp.text)
 
     # 3. Get session status
-    status_resp = await client.get("/session/status")
+    status_resp = await client.get(f"/session/{session_id}/status")
     assert status_resp.status_code == 200
     assert isinstance(status_resp.json(), dict)
     _log_result("test_full_session_lifecycle_status", status_resp.status_code, status_resp.text)

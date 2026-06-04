@@ -432,7 +432,7 @@ def test_write_file_params_schema(write_file_tool: WriteFile):
                     "description": "Write mode: overwrite or append.",
                     "enum": ["overwrite", "append"],
                     "type": "string",
-                }, "reason": {"default": "", "description": "Reason to call this tool.", "type": "string"}},
+                }},
             "required": ["path", "content"],
             "type": "object",
         }
@@ -493,7 +493,7 @@ def test_edit_file_params_schema(edit_file_tool: EditFile):
                         },
                     ],
                     "description": "One or more edits.",
-                }, "reason": {"default": "", "description": "Reason to call this tool.", "type": "string"}},
+                }},
             "required": ["path", "edit"],
             "type": "object",
         }

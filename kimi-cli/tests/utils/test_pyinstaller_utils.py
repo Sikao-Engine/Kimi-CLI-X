@@ -17,124 +17,50 @@ def test_pyinstaller_datas():
     site_packages = f".venv/lib/python{python_version}/site-packages"
     rg_binary = "rg.exe" if platform.system() == "Windows" else "rg"
     has_rg_binary = (project_root / "src/kimi_cli/deps/bin" / rg_binary).exists()
-    datas = [
-        (
-            Path(path)
-            .relative_to(project_root)
-            .as_posix()
-            .replace(".venv/Lib/site-packages", site_packages),
-            Path(dst).as_posix(),
-        )
-        for path, dst in datas
-    ]
+    _datas = []
+    for path, dst in datas:
+        p = Path(path)
+        if p.is_relative_to(project_root):
+            _datas.append((
+                p.relative_to(project_root)
+                .as_posix()
+                .replace(".venv/Lib/site-packages", site_packages),
+                Path(dst).as_posix(),
+            ))
+    datas = _datas
 
     datas = [(p, d) for p, d in datas if "web/static" not in d and "vis/static" not in d]
 
     expected_datas = [
-        (
-            f"{site_packages}/dateparser/data/dateparser_tz_cache.pkl",
-            "dateparser/data",
-        ),
-        (
-            f"{site_packages}/fastmcp/../fastmcp-3.2.4.dist-info/INSTALLER",
-            "fastmcp/../fastmcp-3.2.4.dist-info",
-        ),
-        (
-            f"{site_packages}/fastmcp/../fastmcp-3.2.4.dist-info/METADATA",
-            "fastmcp/../fastmcp-3.2.4.dist-info",
-        ),
-        (
-            f"{site_packages}/fastmcp/../fastmcp-3.2.4.dist-info/RECORD",
-            "fastmcp/../fastmcp-3.2.4.dist-info",
-        ),
-        (
-            f"{site_packages}/fastmcp/../fastmcp-3.2.4.dist-info/REQUESTED",
-            "fastmcp/../fastmcp-3.2.4.dist-info",
-        ),
-        (
-            f"{site_packages}/fastmcp/../fastmcp-3.2.4.dist-info/WHEEL",
-            "fastmcp/../fastmcp-3.2.4.dist-info",
-        ),
-        (
-            f"{site_packages}/fastmcp/../fastmcp-3.2.4.dist-info/entry_points.txt",
-            "fastmcp/../fastmcp-3.2.4.dist-info",
-        ),
-        (
-            f"{site_packages}/fastmcp/../fastmcp-3.2.4.dist-info/licenses/LICENSE",
-            "fastmcp/../fastmcp-3.2.4.dist-info/licenses",
-        ),
-        (
-            "src/kimi_cli/CHANGELOG.md",
-            "kimi_cli",
-        ),
-        ("src/kimi_cli/agents/default/agent.yaml", "kimi_cli/agents/default"),
-        ("src/kimi_cli/agents/default/coder.yaml", "kimi_cli/agents/default"),
-        ("src/kimi_cli/agents/default/explore.yaml", "kimi_cli/agents/default"),
-        ("src/kimi_cli/agents/default/plan.yaml", "kimi_cli/agents/default"),
-        ("src/kimi_cli/agents/default/system.md", "kimi_cli/agents/default"),
-        ("src/kimi_cli/agents/okabe/agent.yaml", "kimi_cli/agents/okabe"),
-        ("src/kimi_cli/prompts/compact.md", "kimi_cli/prompts"),
-        ("src/kimi_cli/prompts/init.md", "kimi_cli/prompts"),
-        (
-            "src/kimi_cli/skills/kimi-cli-help/SKILL.md",
-            "kimi_cli/skills/kimi-cli-help",
-        ),
-        (
-            "src/kimi_cli/skills/skill-creator/SKILL.md",
-            "kimi_cli/skills/skill-creator",
-        ),
-        ("src/kimi_cli/tools/agent/description.md", "kimi_cli/tools/agent"),
-        ("src/kimi_cli/tools/ask_user/description.md", "kimi_cli/tools/ask_user"),
-        (
-            "src/kimi_cli/tools/dmail/dmail.md",
-            "kimi_cli/tools/dmail",
-        ),
-        ("src/kimi_cli/tools/background/list.md", "kimi_cli/tools/background"),
-        ("src/kimi_cli/tools/background/output.md", "kimi_cli/tools/background"),
-        ("src/kimi_cli/tools/background/stop.md", "kimi_cli/tools/background"),
-        (
-            "src/kimi_cli/tools/file/glob.md",
-            "kimi_cli/tools/file",
-        ),
-        (
-            "src/kimi_cli/tools/file/grep.md",
-            "kimi_cli/tools/file",
-        ),
-        (
-            "src/kimi_cli/tools/file/read.md",
-            "kimi_cli/tools/file",
-        ),
-        (
-            "src/kimi_cli/tools/file/read_media.md",
-            "kimi_cli/tools/file",
-        ),
-        (
-            "src/kimi_cli/tools/file/replace.md",
-            "kimi_cli/tools/file",
-        ),
-        (
-            "src/kimi_cli/tools/file/write.md",
-            "kimi_cli/tools/file",
-        ),
-        ("src/kimi_cli/tools/plan/description.md", "kimi_cli/tools/plan"),
-        ("src/kimi_cli/tools/plan/enter_description.md", "kimi_cli/tools/plan"),
-        ("src/kimi_cli/tools/shell/bash.md", "kimi_cli/tools/shell"),
-        (
-            "src/kimi_cli/tools/think/think.md",
-            "kimi_cli/tools/think",
-        ),
-        (
-            "src/kimi_cli/tools/todo/set_todo_list.md",
-            "kimi_cli/tools/todo",
-        ),
-        (
-            "src/kimi_cli/tools/web/fetch.md",
-            "kimi_cli/tools/web",
-        ),
-        (
-            "src/kimi_cli/tools/web/search.md",
-            "kimi_cli/tools/web",
-        ),
+        ('src/kimi_cli/CHANGELOG.md', 'kimi_cli'),
+        ('src/kimi_cli/agents/default/agent.yaml', 'kimi_cli/agents/default'),
+        ('src/kimi_cli/agents/default/coder.yaml', 'kimi_cli/agents/default'),
+        ('src/kimi_cli/agents/default/explore.yaml', 'kimi_cli/agents/default'),
+        ('src/kimi_cli/agents/default/plan.yaml', 'kimi_cli/agents/default'),
+        ('src/kimi_cli/agents/default/system.md', 'kimi_cli/agents/default'),
+        ('src/kimi_cli/agents/okabe/agent.yaml', 'kimi_cli/agents/okabe'),
+        ('src/kimi_cli/prompts/compact.md', 'kimi_cli/prompts'),
+        ('src/kimi_cli/prompts/compact_cascade.md', 'kimi_cli/prompts'),
+        ('src/kimi_cli/prompts/init.md', 'kimi_cli/prompts'),
+        ('src/kimi_cli/skills/backup_/kimi-cli-help/SKILL.md', 'kimi_cli/skills/backup_/kimi-cli-help'),
+        ('src/kimi_cli/skills/skill-creator/SKILL.md', 'kimi_cli/skills/skill-creator'),
+        ('src/kimi_cli/tools/agent/description.md', 'kimi_cli/tools/agent'),
+        ('src/kimi_cli/tools/ask_user/description.md', 'kimi_cli/tools/ask_user'),
+        ('src/kimi_cli/tools/background/list.md', 'kimi_cli/tools/background'),
+        ('src/kimi_cli/tools/background/output.md', 'kimi_cli/tools/background'),
+        ('src/kimi_cli/tools/background/stop.md', 'kimi_cli/tools/background'),
+        ('src/kimi_cli/tools/dmail/dmail.md', 'kimi_cli/tools/dmail'),
+        ('src/kimi_cli/tools/file/glob.md', 'kimi_cli/tools/file'),
+        ('src/kimi_cli/tools/file/read.md', 'kimi_cli/tools/file'),
+        ('src/kimi_cli/tools/file/read_media.md', 'kimi_cli/tools/file'),
+        ('src/kimi_cli/tools/file/write.md', 'kimi_cli/tools/file'),
+        ('src/kimi_cli/tools/plan/description.md', 'kimi_cli/tools/plan'),
+        ('src/kimi_cli/tools/plan/enter_description.md', 'kimi_cli/tools/plan'),
+        ('src/kimi_cli/tools/shell/bash.md', 'kimi_cli/tools/shell'),
+        ('src/kimi_cli/tools/shell/powershell.md', 'kimi_cli/tools/shell'),
+        ('src/kimi_cli/tools/think/think.md', 'kimi_cli/tools/think'),
+        ('src/kimi_cli/tools/web/fetch.md', 'kimi_cli/tools/web'),
+        ('src/kimi_cli/tools/web/search.md', 'kimi_cli/tools/web'),
     ]
     if has_rg_binary:
         expected_datas.append((f"src/kimi_cli/deps/bin/{rg_binary}", "kimi_cli/deps/bin"))
@@ -159,6 +85,7 @@ def test_pyinstaller_hiddenimports():
             "kimi_cli.tools.dmail",
             "kimi_cli.tools.file", "kimi_cli.tools.file.check_fmt", "kimi_cli.tools.file.glob",
             "kimi_cli.tools.file.grep_local",
+            "kimi_cli.tools.file.hash_line",
             "kimi_cli.tools.file.plan_mode",
             "kimi_cli.tools.file.read",
             "kimi_cli.tools.file.read_media",

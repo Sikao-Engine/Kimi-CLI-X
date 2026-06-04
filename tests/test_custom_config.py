@@ -16,6 +16,12 @@ from kimix.tools.file.run import Run, RunParams
 from kosong.tooling import ToolError, ToolOk
 
 
+@pytest.fixture(autouse=True)
+def patch_find_bash() -> None:
+    with patch("kimix.tools.file.run.find_bash", return_value=None):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # check_path_protected helper
 # ---------------------------------------------------------------------------
@@ -269,19 +275,19 @@ class TestRunForbiddenCommands:
         params = RunParams(command="git commit -m msg")
         result = await run_tool(params)
         assert isinstance(result, ToolError)
-        assert result.brief == "git commit -m msg"
+        assert result.brief == "Forbidden command"
 
     async def test_forbidden_command_with_path_in_path(self, run_tool: Run) -> None:
         params = RunParams(command="git commit -m msg")
         result = await run_tool(params)
         assert isinstance(result, ToolError)
-        assert "git" in result.brief and "commit" in result.brief
+        assert result.brief == "Forbidden command"
 
     async def test_forbidden_command_rm_rf(self, run_tool: Run) -> None:
         params = RunParams(command="rm -rf /")
         result = await run_tool(params)
         assert isinstance(result, ToolError)
-        assert "rm" in result.brief
+        assert result.brief == "Forbidden command"
 
     async def test_allowed_command(self, run_tool: Run, mock_process_task: MagicMock) -> None:
         params = RunParams(command="git status")

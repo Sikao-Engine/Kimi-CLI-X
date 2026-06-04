@@ -91,10 +91,17 @@ def _mock_approval():
 def _mock_session():
     """Create a minimal mock Session with the required attributes."""
 
+    class MockFileMtime:
+        def mark_dirty(self, path: str) -> bool:
+            return True
+        def clean_file(self, path: str) -> None:
+            pass
+
     class MockSession:
         id = "test-session"
         custom_data = {}
         custom_config = {}
+        file_mtime = MockFileMtime()
 
     return MockSession()
 

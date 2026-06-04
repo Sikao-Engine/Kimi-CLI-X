@@ -21,6 +21,7 @@ class FakeSession:
         self.status = FakeStatus(context_usage=context_usage, context_tokens=context_tokens)
         self.cancelled = False
         self._cancel_event = None
+        self._tmp_data = {}
 
     async def prompt(self, _prompt: str, *, merge_wire_messages: bool = False) -> Any:
         del merge_wire_messages
@@ -63,7 +64,7 @@ def test_print_agent_json_groups_tool_parts_before_tool_to_text_transition(monke
     session = FakeSession(context_usage=0.5, context_tokens=4096)
     tool_call = ToolCall(
         id="call-1",
-        function=ToolCall.FunctionBody(name="Run", arguments='{"cmd": "pytest"}'),
+        function=ToolCall.FunctionBody(name="Run", arguments='{"command": "pytest"}'),
     )
 
     base.print_agent_json(tool_call, session)

@@ -33,6 +33,7 @@ Line 5: End of file"""
 
 async def test_read_entire_file(read_file_tool: ReadFile, sample_file: KaosPath):
     """Test reading an entire file."""
+    display_path = str(sample_file).replace("\\", "/")
     result = await read_file_tool(Params(path=str(sample_file)))
     assert not result.is_error
     assert result.output == snapshot(
@@ -44,13 +45,13 @@ async def test_read_entire_file(read_file_tool: ReadFile, sample_file: KaosPath)
      5	Line 5: End of file\
 """
     )
-    assert result.message == snapshot(
-        "5 lines read from file starting from line 1. Total lines in file: 5. End of file reached."
-    )
+    assert result.message.startswith("5 lines read from file starting from line 1. Total lines in file: 5. End of file reached.")
+    assert result.message.endswith(f" Path: {display_path}")
 
 
 async def test_read_with_line_offset(read_file_tool: ReadFile, sample_file: KaosPath):
     """Test reading from a specific line offset."""
+    display_path = str(sample_file).replace("\\", "/")
     result = await read_file_tool(Params(path=str(sample_file), line_offset=3))
     assert not result.is_error
     assert result.output == snapshot(
@@ -60,13 +61,13 @@ async def test_read_with_line_offset(read_file_tool: ReadFile, sample_file: Kaos
      5	Line 5: End of file\
 """
     )
-    assert result.message == snapshot(
-        "3 lines read from file starting from line 3. Total lines in file: 5. End of file reached."
-    )
+    assert result.message.startswith("3 lines read from file starting from line 3. Total lines in file: 5. End of file reached.")
+    assert result.message.endswith(f" Path: {display_path}")
 
 
 async def test_read_with_n_lines(read_file_tool: ReadFile, sample_file: KaosPath):
     """Test reading a specific number of lines."""
+    display_path = str(sample_file).replace("\\", "/")
     result = await read_file_tool(Params(path=str(sample_file), n_lines=2))
     assert not result.is_error
     assert result.output == snapshot(
@@ -75,13 +76,13 @@ async def test_read_with_n_lines(read_file_tool: ReadFile, sample_file: KaosPath
      2	Line 2: This is a test file
 """
     )
-    assert result.message == snapshot(
-        "2 lines read from file starting from line 1."
-    )
+    assert result.message.startswith("2 lines read from file starting from line 1.")
+    assert result.message.endswith(f" Path: {display_path}")
 
 
 async def test_read_with_line_offset_and_n_lines(read_file_tool: ReadFile, sample_file: KaosPath):
     """Test reading with both line offset and n_lines."""
+    display_path = str(sample_file).replace("\\", "/")
     result = await read_file_tool(Params(path=str(sample_file), line_offset=2, n_lines=2))
     assert not result.is_error
     assert result.output == snapshot(
@@ -90,9 +91,8 @@ async def test_read_with_line_offset_and_n_lines(read_file_tool: ReadFile, sampl
      3	Line 3: With multiple lines
 """
     )
-    assert result.message == snapshot(
-        "2 lines read from file starting from line 2."
-    )
+    assert result.message.startswith("2 lines read from file starting from line 2.")
+    assert result.message.endswith(f" Path: {display_path}")
 
 
 async def test_read_nonexistent_file(read_file_tool: ReadFile, temp_work_dir: KaosPath):
@@ -101,8 +101,8 @@ async def test_read_nonexistent_file(read_file_tool: ReadFile, temp_work_dir: Ka
     result = await read_file_tool(Params(path=str(nonexistent_file)))
     assert result.is_error
     display_path = str(nonexistent_file).replace("\\", "/")
-    assert result.message == snapshot(f"`{display_path}` does not exist.")
-    assert result.brief == snapshot(f"File not found: {display_path}")
+    assert result.message == f"`{display_path}` does not exist."
+    assert result.brief == "File not found"
 
 
 async def test_read_directory_instead_of_file(read_file_tool: ReadFile, temp_work_dir: KaosPath):
@@ -110,19 +110,19 @@ async def test_read_directory_instead_of_file(read_file_tool: ReadFile, temp_wor
     result = await read_file_tool(Params(path=str(temp_work_dir)))
     assert result.is_error
     display_path = str(temp_work_dir).replace("\\", "/")
-    assert result.message == snapshot(f"`{display_path}` is not a file.")
-    assert result.brief == snapshot(f"Invalid path: {display_path}")
+    assert result.message == f"`{display_path}` is not a file."
+    assert result.brief == "Invalid path"
 
 
 async def test_read_with_relative_path(
     read_file_tool: ReadFile, temp_work_dir: KaosPath, sample_file: KaosPath
 ):
     """Test reading with a relative path."""
+    display_path = str(sample_file.relative_to(temp_work_dir)).replace("\\", "/")
     result = await read_file_tool(Params(path=str(sample_file.relative_to(temp_work_dir))))
     assert not result.is_error
-    assert result.message == snapshot(
-        "5 lines read from file starting from line 1. Total lines in file: 5. End of file reached."
-    )
+    assert result.message.startswith("5 lines read from file starting from line 1. Total lines in file: 5. End of file reached.")
+    assert result.message.endswith(f" Path: {display_path}")
     assert result.output == snapshot("""\
      1	Line 1: Hello World
      2	Line 2: This is a test file
@@ -147,13 +147,13 @@ async def test_read_empty_file(read_file_tool: ReadFile, temp_work_dir: KaosPath
     """Test reading an empty file."""
     empty_file = temp_work_dir / "empty.txt"
     await empty_file.write_text("")
+    display_path = str(empty_file).replace("\\", "/")
 
     result = await read_file_tool(Params(path=str(empty_file)))
     assert not result.is_error
     assert result.output == snapshot("")
-    assert result.message == snapshot(
-        "No lines read from file. Total lines in file: 0. End of file reached."
-    )
+    assert result.message.startswith("No lines read from file. Total lines in file: 0. End of file reached.")
+    assert result.message.endswith(f" Path: {display_path}")
 
 
 async def test_read_image_file(read_file_tool: ReadFile, temp_work_dir: KaosPath):
@@ -169,7 +169,7 @@ async def test_read_image_file(read_file_tool: ReadFile, temp_work_dir: KaosPath
     assert result.message == snapshot(
         f"`{display_path}` is a image file. Use other appropriate tools to read image or video files."
     )
-    assert result.brief == snapshot(f"Unsupported file type: {display_path}")
+    assert result.brief == "Unsupported file type"
 
 
 async def test_read_extensionless_image_file(read_file_tool: ReadFile, temp_work_dir: KaosPath):
@@ -185,7 +185,7 @@ async def test_read_extensionless_image_file(read_file_tool: ReadFile, temp_work
     assert result.message == snapshot(
         f"`{display_path}` is a image file. Use other appropriate tools to read image or video files."
     )
-    assert result.brief == snapshot(f"Unsupported file type: {display_path}")
+    assert result.brief == "Unsupported file type"
 
 
 async def test_read_video_file(read_file_tool: ReadFile, temp_work_dir: KaosPath):
@@ -201,17 +201,17 @@ async def test_read_video_file(read_file_tool: ReadFile, temp_work_dir: KaosPath
     assert result.message == snapshot(
         f"`{display_path}` is a video file. Use other appropriate tools to read image or video files."
     )
-    assert result.brief == snapshot(f"Unsupported file type: {display_path}")
+    assert result.brief == "Unsupported file type"
 
 
 async def test_read_line_offset_beyond_file_length(read_file_tool: ReadFile, sample_file: KaosPath):
     """Test reading with line offset beyond file length."""
+    display_path = str(sample_file).replace("\\", "/")
     result = await read_file_tool(Params(path=str(sample_file), line_offset=10))
     assert not result.is_error
     assert result.output == snapshot("")
-    assert result.message == snapshot(
-        "No lines read from file. Total lines in file: 5. End of file reached."
-    )
+    assert result.message.startswith("No lines read from file. Total lines in file: 5. End of file reached.")
+    assert result.message.endswith(f" Path: {display_path}")
 
 
 async def test_read_unicode_file(read_file_tool: ReadFile, temp_work_dir: KaosPath):
@@ -219,6 +219,7 @@ async def test_read_unicode_file(read_file_tool: ReadFile, temp_work_dir: KaosPa
     unicode_file = temp_work_dir / "unicode.txt"
     content = "Hello 世界 🌍\nUnicode test: café, naïve, résumé"
     await unicode_file.write_text(content, encoding="utf-8")
+    display_path = str(unicode_file).replace("\\", "/")
 
     result = await read_file_tool(Params(path=str(unicode_file)))
     assert not result.is_error
@@ -228,13 +229,13 @@ async def test_read_unicode_file(read_file_tool: ReadFile, temp_work_dir: KaosPa
      2	Unicode test: café, naïve, résumé\
 """
     )
-    assert result.message == snapshot(
-        "2 lines read from file starting from line 1. Total lines in file: 2. End of file reached."
-    )
+    assert result.message.startswith("2 lines read from file starting from line 1. Total lines in file: 2. End of file reached.")
+    assert result.message.endswith(f" Path: {display_path}")
 
 
 async def test_read_edge_cases(read_file_tool: ReadFile, sample_file: KaosPath):
     """Test edge cases for line offset reading."""
+    display_path = str(sample_file).replace("\\", "/")
     # Test reading from line 1 (should be same as default)
     result = await read_file_tool(Params(path=str(sample_file), line_offset=1))
     assert not result.is_error
@@ -247,25 +248,22 @@ async def test_read_edge_cases(read_file_tool: ReadFile, sample_file: KaosPath):
      5	Line 5: End of file\
 """
     )
-    assert result.message == snapshot(
-        "5 lines read from file starting from line 1. Total lines in file: 5. End of file reached."
-    )
+    assert result.message.startswith("5 lines read from file starting from line 1. Total lines in file: 5. End of file reached.")
+    assert result.message.endswith(f" Path: {display_path}")
 
     # Test reading from line 5 (last line)
     result = await read_file_tool(Params(path=str(sample_file), line_offset=5))
     assert not result.is_error
     assert result.output == snapshot("     5\tLine 5: End of file")
-    assert result.message == snapshot(
-        "1 lines read from file starting from line 5. Total lines in file: 5. End of file reached."
-    )
+    assert result.message.startswith("1 lines read from file starting from line 5. Total lines in file: 5. End of file reached.")
+    assert result.message.endswith(f" Path: {display_path}")
 
     # Test reading with offset and n_lines combined
     result = await read_file_tool(Params(path=str(sample_file), line_offset=2, n_lines=1))
     assert not result.is_error
     assert result.output == snapshot("     2\tLine 2: This is a test file\n")
-    assert result.message == snapshot(
-        "1 lines read from file starting from line 2."
-    )
+    assert result.message.startswith("1 lines read from file starting from line 2.")
+    assert result.message.endswith(f" Path: {display_path}")
 
 
 async def test_line_truncation_and_messaging(read_file_tool: ReadFile, temp_work_dir: KaosPath):
@@ -297,12 +295,12 @@ async def test_line_truncation_and_messaging(read_file_tool: ReadFile, temp_work
     content = f"{long_line_1}\n{normal_line}\n{long_line_2}"
     await multi_line_file.write_text(content)
 
+    display_path = str(multi_line_file).replace("\\", "/")
     result = await read_file_tool(Params(path=str(multi_line_file)))
     assert not result.is_error
     assert isinstance(result.output, str)
-    assert result.message == snapshot(
-        "3 lines read from file starting from line 1. Total lines in file: 3. End of file reached. Lines [1, 3] were truncated."
-    )
+    assert result.message.startswith("3 lines read from file starting from line 1. Total lines in file: 3. End of file reached. Lines [1, 3] were truncated.")
+    assert result.message.endswith(f" Path: {display_path}")
 
     # Verify truncation actually happened for specific lines
     lines = result.output.split("\n")
@@ -445,15 +443,15 @@ async def test_read_with_tilde_path_expansion(read_file_tool: ReadFile, temp_wor
     try:
         # Create the test file in home directory
         test_file.write_text(test_content)
+        display_path = "~/.test_expanduser_temp"
 
         # Read using ~ path
         result = await read_file_tool(Params(path="~/.test_expanduser_temp"))
 
         assert not result.is_error
         assert "Test content for tilde expansion" in result.output
-        assert result.message == snapshot(
-            "1 lines read from file starting from line 1. Total lines in file: 1. End of file reached."
-        )
+        assert result.message.startswith("1 lines read from file starting from line 1. Total lines in file: 1. End of file reached.")
+        assert result.message.endswith(f" Path: {display_path}")
     finally:
         # Clean up
         if test_file.exists():

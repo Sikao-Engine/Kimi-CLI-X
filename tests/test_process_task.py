@@ -224,7 +224,7 @@ async def test_start_returns_task_id(mock_session: MagicMock) -> None:
 async def test_start_default_name(mock_session: MagicMock) -> None:
     task = ProcessTask(sys.executable)
     tid = await task.start(mock_session, kind="cmd")
-    assert tid.startswith("cmd_")
+    assert tid == "cmd"
     assert task.task_id == tid
 
 

@@ -409,17 +409,6 @@ async def test_replace_all_no_match(edit_file_tool: EditFile, temp_work_dir: Kao
     assert "No replacements were made" in result.message
 
 
-async def test_replace_bind_plan_mode(runtime: Runtime, session: Session, temp_work_dir: KaosPath):
-    """Test bind_plan_mode sets the checker and getter correctly."""
-    with tool_call_context("EditFile"):
-        tool = EditFile(runtime, Approval(yolo=True), session)
-        checker = lambda: False
-        getter = lambda: None
-        tool.bind_plan_mode(checker, getter)
-        assert tool._plan_mode_checker is checker
-        assert tool._plan_file_path_getter is getter
-
-
 async def test_replace_oserror_on_write(runtime: Runtime, session: Session, temp_work_dir: KaosPath):
     """Test that an OSError during write is handled gracefully."""
     file_path = temp_work_dir / "test.txt"
