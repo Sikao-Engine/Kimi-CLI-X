@@ -151,7 +151,7 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
 
         reminder = (
             "read the following requirement carefully and generate a comprehensive plan. "
-            f"Save the complete plan to a file using the Note tool or write to `{plan_file}`.\n\n"
+            f"Save the complete plan to a file using the Note tool.\n\n"
             f"Requirement:\n{requirement.strip()}"
         )
 
