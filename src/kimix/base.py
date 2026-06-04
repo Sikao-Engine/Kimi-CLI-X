@@ -472,7 +472,7 @@ def _format_tool_args(name: str, args: str | None) -> str | None:
 
         match name:
             case "Bash":
-                return ", ".join(_collect("cmd", "cwd", "timeout", "output_path"))
+                return ", ".join(_collect("cmd", "timeout"))
             case "Run":
                 return ", ".join(_collect("command", "cwd", "timeout", "output_path", "env", "run_in_background"))
             case "Python":
@@ -533,6 +533,8 @@ def _format_tool_args(name: str, args: str | None) -> str | None:
                 return ""
             case "AgentClose":
                 return ", ".join(_collect("session_id"))
+            case "Note":
+                return ", ".join(_collect("content", hide={"content"}))
             case "AskParent":
                 return ", ".join(_collect("question", "context"))
             case _:
@@ -592,11 +594,20 @@ def _handle_tool_result(wire_msg: ToolResult, output_function: Callable[[str, Me
     result_text = _format_tool_result(wire_msg)
     if result_text:
         prefix = ("✗ " if rv.is_error else "✓ ")
-        _stream.colorful_print_word(
-            f"{prefix}{result_text}",
-            fg=Color.BRIGHT_RED if rv.is_error else Color.BRIGHT_GREEN,
-            require_new_line=True,
-        )
+        if display_text:
+            last_tc: ToolCall = _session._tmp_data.get(_LAST_TOOL_CALL_KEY)
+            tool_name = last_tc.function.name if last_tc else "tool"
+            _stream.colorful_print_word(
+                f"{prefix}{tool_name}",
+                fg=Color.BRIGHT_RED if rv.is_error else Color.BRIGHT_GREEN,
+                require_new_line=True,
+            )
+        else:
+            _stream.colorful_print_word(
+                f"{prefix}{result_text}",
+                fg=Color.BRIGHT_RED if rv.is_error else Color.BRIGHT_GREEN,
+                require_new_line=True,
+            )
     else:
         _stream.print_word('', True)
     _stream._state = StreamPrintState.Other
@@ -777,7 +788,6 @@ _default_provider: dict[str, Any] | None = None
 _default_sub_provider: dict[str, Any] | None = None
 _default_manually_cot: bool = False
 _default_ralph: int | None = None
-_default_supervisor: bool = False
 
 # Common skill directory paths (relative to current working directory)
 COMMON_SKILL_DIRS: list[str] = [
@@ -817,11 +827,6 @@ def set_default_skill_dirs(value: list[Any]) -> None:
 def set_default_manually_cot(value: bool) -> None:
     global _default_manually_cot
     _default_manually_cot = value
-
-
-def set_default_supervisor(value: bool) -> None:
-    global _default_supervisor
-    _default_supervisor = value
 
 
 def set_default_provider(value: dict[str, Any] | None) -> None:

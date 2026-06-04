@@ -1,6 +1,4 @@
 import json_repair
-from collections.abc import Callable
-from pathlib import Path
 from typing import Literal, override
 
 from kaos.path import KaosPath
@@ -13,7 +11,6 @@ from kimi_cli.soul.approval import Approval
 from kimi_cli.tools.display import DiffDisplayBlock
 from kimi_cli.tools.file import FileActions
 from kimi_cli.tools.file.check_fmt import check_json_text, check_toml_text, check_xml_text, check_yaml_text
-from kimi_cli.tools.file.plan_mode import inspect_plan_edit_target
 from kimi_cli.utils.diff import build_diff_blocks
 from kimi_cli import logger
 from kimi_cli.utils.path import is_within_directory, is_within_workspace, kaos_path_from_user_input
@@ -46,16 +43,6 @@ class WriteFile(CallableTool2[Params]):
         self._approval = approval
         self._session = session
         self._vfs = vfs
-        self._plan_mode_checker: Callable[[], bool] | None = None
-        self._plan_file_path_getter: Callable[[], Path | None] | None = None
-
-    def bind_plan_mode(
-        self, checker: Callable[[], bool], path_getter: Callable[[], Path | None]
-    ) -> None:
-        """Bind plan mode state checker and plan file path getter."""
-        self._plan_mode_checker = checker
-        self._plan_file_path_getter = path_getter
-
     async def _validate_path(self, path: KaosPath) -> tuple[ToolError | None, bool]:
         """Validate that the path is safe to write.
 
@@ -107,7 +94,7 @@ class WriteFile(CallableTool2[Params]):
 
         if not self._session.file_mtime.mark_dirty(params.path):
             return ToolError(
-                message="File modified, read file first.",
+                message=f"File modified, read file first. Path: {display_path}",
                 brief="File modified",
             )
 
@@ -130,20 +117,6 @@ class WriteFile(CallableTool2[Params]):
                     brief="Path is a directory",
                 )
 
-            plan_target = inspect_plan_edit_target(
-                logical_path,
-                plan_mode_checker=self._plan_mode_checker,
-                plan_file_path_getter=self._plan_file_path_getter,
-            )
-            if isinstance(plan_target, ToolError):
-                if _outside:
-                    plan_target.message = f"[out of work-dir] {plan_target.message}"
-                return plan_target
-
-            is_plan_file_write = plan_target.is_plan_target
-            if is_plan_file_write and plan_target.plan_path is not None:
-                plan_target.plan_path.parent.mkdir(parents=True, exist_ok=True)
-
             try:
                 await p.parent.mkdir(parents=True, exist_ok=True)
             except OSError as e:
@@ -158,6 +131,7 @@ class WriteFile(CallableTool2[Params]):
                     message=(
                         f"{'[out of work-dir] ' if _outside else ''}Invalid write mode: `{params.mode}`. "
                         "Mode must be either `overwrite` or `append`."
+                        f" Path: {display_path}"
                     ),
                     brief="Invalid write mode",
                 )
@@ -224,23 +198,21 @@ class WriteFile(CallableTool2[Params]):
                     new_text,
                 )
 
-            # Plan file writes are auto-approved; other writes need approval
-            if not is_plan_file_write:
-                action = (
-                    FileActions.EDIT
-                    if path_is_inside
-                    else FileActions.EDIT_OUTSIDE
-                )
+            action = (
+                FileActions.EDIT
+                if path_is_inside
+                else FileActions.EDIT_OUTSIDE
+            )
 
-                # Request approval
-                result = await self._approval.request(
-                    self.name,
-                    action,
-                    f"Write file `{display_logical_path}`",
-                    display=diff_blocks,
-                )
-                if not result:
-                    return result.rejection_error()
+            # Request approval
+            result = await self._approval.request(
+                self.name,
+                action,
+                f"Write file `{display_logical_path}`",
+                display=diff_blocks,
+            )
+            if not result:
+                return result.rejection_error()
 
             # Write content to file
             if params.mode == "append" and file_existed:
@@ -254,7 +226,7 @@ class WriteFile(CallableTool2[Params]):
 
             if fmt_error:
                 return ToolError(
-                    message=f"{'[out of work-dir] ' if _outside else ''}File successfully {action_desc}, but {fmt_error}",
+                    message=f"{'[out of work-dir] ' if _outside else ''}File successfully {action_desc}, but {fmt_error} Path: {display_path}",
                     brief="Format validation failed",
                 )
             return ToolReturnValue(
@@ -262,6 +234,7 @@ class WriteFile(CallableTool2[Params]):
                 output="",
                 message=(
                     f"{'[out of work-dir] ' if _outside else ''}File successfully {action_desc}. Current size: {file_size} bytes."
+                    f" Path: {display_path}"
                 ),
                 display=diff_blocks,
             )
@@ -276,6 +249,6 @@ class WriteFile(CallableTool2[Params]):
             except Exception:
                 pass
             return ToolError(
-                message=f"{'[out of work-dir] ' if _outside_ex else ''}Failed to write to {display_path}. Error: {e}",
+                message=f"{'[out of work-dir] ' if _outside_ex else ''}Failed to write to {display_path}. Error: {e}.",
                 brief="Failed to write file",
             )

@@ -9,8 +9,9 @@ from kimix.base import print_success, print_error, print_warning, print_debug, c
 from kimix.utils import (
     clear_default_context, get_default_session, fix_error, compact_default_context,
     print_usage, set_ralph_loop,
-    _create_default_session, close_session, create_session, SystemPromptType,
-    prompt_plan,
+    _create_default_session, close_session, create_session, create_supervisor_session,
+    SystemPromptType,
+    prompt_plan, prompt,
 )
 import kimix.utils._globals as _globals
 from .init import init
@@ -65,10 +66,7 @@ def _cmd_resume(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]
     try:
         new_session = create_session(session_id=session_id, resume=True)
         _globals._default_session = new_session
-        if base._default_supervisor:
-            _globals._default_role = SystemPromptType.Supervisor
-        else:
-            _globals._default_role = SystemPromptType.Worker
+        _globals._default_role = SystemPromptType.Worker
         print_success(f'Resumed session {session_id}')
     except Exception as e:
         print_error(f'Failed to resume session: {e}')
@@ -323,25 +321,38 @@ def _cmd_init(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
 
 
 def _cmd_supervisor(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
-    if len(task_split) < 2:
-        print_error('Command must be /supervisor:on or /supervisor:off')
+    """Start a supervisor session with multi-line input text."""
+    print(
+        f'\n>>>> Start input for supervisor, end with {colorful_text("/end", Color.YELLOW)}, '
+        f'cancel with {colorful_text("/cancel", Color.YELLOW)}')
+    text: list[str] = []
+    while True:
+        s = _input('', text_arr)
+        if s.strip() == '/end':
+            break
+        if s.strip() == '/cancel':
+            text.clear()
+            break
+        text.append(s)
+    task_prompt = '\n'.join(text).strip()
+    if not task_prompt:
+        print_warning('No input provided for supervisor.')
         return None, False
-    val = task_split[1].strip().lower()
-    if val == 'on':
-        base.set_default_supervisor(True)
-        print_success('Supervisor mode ON.')
-    elif val == 'off':
-        base.set_default_supervisor(False)
-        print_success('Supervisor mode OFF.')
-    else:
-        print_error('Command must be /supervisor:on or /supervisor:off')
+
+    print_debug('Creating supervisor session...')
+    try:
+        supervisor_session = create_supervisor_session()
+    except Exception as e:
+        print_error(f'Failed to create supervisor session: {e}')
         return None, False
-    session = get_default_session()
-    if session:
-        close_session(session)
-    _globals._default_session = None
-    _globals._default_role = None
-    _create_default_session()
+
+    try:
+        prompt(prompt_str=task_prompt, session=supervisor_session)
+    except Exception as e:
+        print_error(f'Supervisor prompt failed: {e}')
+    finally:
+        close_session(supervisor_session)
+
     return None, False
 
 

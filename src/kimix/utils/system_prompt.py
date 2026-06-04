@@ -57,8 +57,11 @@ def get_system_prompt(
             use_agent_md = True
             use_skills = True
             role_doc = f'You are a {role}'
-            items.append(
-                'Persist: finish all requirements, keep trying until done.')
+            items.append('Persist: finish all requirements, keep trying until done.')
+            items.append('One action per turn: each response = exactly one tool call, edit, or verification.')
+            items.append('Error recovery: retry, adjust approach, or break into sub-tasks. Never give up.')
+            items.append('Verification gate: run all tests/checks and confirm they pass before finishing.')
+            items.append('Completion: only when fully verified, respond with exactly "Task Completed".')
             # if args.KIMI_OS == 'Windows':
             #     items.append('No shell, powershell or cmd: use `Run`/`Python` instead.')
             # else:
@@ -67,7 +70,6 @@ def get_system_prompt(
             if not is_sub_agent:
                 if yolo:
                     items.append('Yolo: no asking. accept all.')
-                items.append('`Search` to search, retrieve skills, docs.')
                 items.append('Drop context aggressively, use `StepMemory` to manage memory.')
                 items.append('Use `ContextRetrieval` to recall past conversation turns that were compacted out of context.')
             else:
@@ -77,7 +79,7 @@ def get_system_prompt(
 
         match agent_role:
             case SystemPromptType.Worker:
-                worker_logic('terse coder')
+                worker_logic('persistent autonomous agent')
             case SystemPromptType.TodoMaker:
                 use_agent_md = True
                 use_skills = True
@@ -94,7 +96,6 @@ def get_system_prompt(
                 items.append(
                     'Keep acyclic. Minimize edges, maximize parallelism.')
                 items.append('Report nodes and edges.')
-                items.append('`Search` to search, retrieve skills, docs.')
             case SystemPromptType.Thinker:
                 worker_logic('thinker')
                 items.append(
@@ -104,7 +105,7 @@ def get_system_prompt(
                 role_doc = 'You are a searcher'
                 items.append('Search, analyze, report concisely.')
             case SystemPromptType.TrivialSubAgent:
-                worker_logic('terse sub-agent', True)
+                worker_logic('persistent autonomous sub-agent', True)
                 items.append('If you need clarification from the parent agent, call the `ask_parent` tool with your question, then stop.')
             case SystemPromptType.Supervisor:
                 use_agent_md = True

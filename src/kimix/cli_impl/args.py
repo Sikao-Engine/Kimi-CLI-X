@@ -39,8 +39,6 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
                         help='Path to a JSON config file to load as default provider')
     parser.add_argument('--ralph', nargs='?', const=1, type=int, default=None,
                         help='Enable Ralph mode (unlimited iterations) or set to specific number')
-    parser.add_argument('--supervisor', action='store_true',
-                        help='Enable supervisor mode')
     args = parser.parse_args()
 
     if args.command == 'serve':
@@ -74,9 +72,6 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
         base.set_default_manually_cot(True)
         print_debug('Manually CoT mode ON.')
 
-    if args.supervisor:
-        base.set_default_supervisor(True)
-        print_debug('Supervisor mode ON.')
     # Read skill_dir from .kimix/config.json (string or array)
     config_json_path = Path('.kimix/config.json')
     if config_json_path.exists():

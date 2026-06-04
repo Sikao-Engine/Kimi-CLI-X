@@ -552,19 +552,6 @@ class KimiSoul:
         def path_getter() -> Path | None:
             return self.get_plan_file_path()
 
-        # WriteFile gets both checker and path_getter (for plan file auto-approve)
-        from kimi_cli.tools.file.write import WriteFile
-
-        write_tool = self._agent.toolset.find("WriteFile")
-        if isinstance(write_tool, WriteFile):
-            write_tool.bind_plan_mode(checker, path_getter)
-
-        from kimi_cli.tools.file.replace import EditFile
-
-        replace_tool = self._agent.toolset.find("EditFile")
-        if isinstance(replace_tool, EditFile):
-            replace_tool.bind_plan_mode(checker, path_getter)
-
         write_line_tool = self._agent.toolset.find("WriteLine")
         if write_line_tool and hasattr(write_line_tool, 'bind_plan_mode') and callable(getattr(write_line_tool, 'bind_plan_mode')):
             write_line_tool.bind_plan_mode(checker, path_getter)

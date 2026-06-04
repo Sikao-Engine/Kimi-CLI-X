@@ -353,14 +353,6 @@ class BashParams(BaseModel):
         le=900,
         description="Timeout in seconds."
     )
-    output_path: str | None = Field(
-        default=None,
-        description="Output file path."
-    )
-    cwd: str | None = Field(
-        default=None,
-        description="Working directory."
-    )
 
 
 class Bash(CallableTool2[BashParams]):
@@ -420,7 +412,7 @@ class Bash(CallableTool2[BashParams]):
         # Build the command line to pass to bash -c
         # On Windows, escape backslashes so bash preserves them in paths.
         safe_cmd = _prepare_bash_cmd(params.cmd)
-        process_task = ProcessTask(self._bash, ["-c", safe_cmd], params.cwd, None)
+        process_task = ProcessTask(self._bash, ["-c", safe_cmd], None, None)
         task_id = await process_task.start(self._session, "bash")
 
         await process_task.wait(params.timeout)
@@ -437,14 +429,6 @@ class Bash(CallableTool2[BashParams]):
 
         output = await process_task.stream.pop_output() if process_task.stream else ""
         success = await process_task.stream.success() if process_task.stream else False
-
-        # Handle output_path
-        if params.output_path:
-            import anyio
-            async with await anyio.open_file(params.output_path, 'w', encoding='utf-8', errors='replace') as f:
-                await f.write(output)
-            display_path = params.output_path.replace("\\", "/")
-            output = f'saved to file `{display_path}`'
 
         if not success:
             return ToolError(output=output, message="Command execution failed", brief="Command execution failed")

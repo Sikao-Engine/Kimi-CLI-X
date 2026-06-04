@@ -117,13 +117,12 @@ class ReadFile(CallableTool2[Params]):
 
     @override
     async def __call__(self, params: Params) -> ToolReturnValue:
+        display_path = params.path.replace("\\", "/")
         if not params.path:
             return ToolError(
                 message="File path cannot be empty.",
                 brief="Empty file path",
             )
-
-        display_path = params.path.replace("\\", "/")
 
         try:
             p = kaos_path_from_user_input(params.path)
@@ -245,6 +244,7 @@ class ReadFile(CallableTool2[Params]):
             message += " End of file reached."
         if truncated_line_numbers:
             message += f" Lines {truncated_line_numbers} were truncated."
+        message += f" Path: {display_path}"
         return ToolOk(
             output="".join(lines_with_no),
             message=message,
@@ -316,6 +316,7 @@ class ReadFile(CallableTool2[Params]):
             message += " End of file reached."
         if truncated_line_numbers:
             message += f" Lines {truncated_line_numbers} were truncated."
+        message += f" Path: {display_path}"
         return ToolOk(
             output="".join(lines_with_no),
             message=message,

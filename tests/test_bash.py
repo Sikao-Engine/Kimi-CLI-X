@@ -62,15 +62,11 @@ class TestBashParams:
         p = BashParams(cmd="ls")
         assert p.cmd == "ls"
         assert p.timeout == 10
-        assert p.output_path is None
-        assert p.cwd is None
 
     def test_full(self) -> None:
-        p = BashParams(cmd="cat -n file.txt", timeout=30, output_path="/tmp/out", cwd="/home")
+        p = BashParams(cmd="cat -n file.txt", timeout=30)
         assert p.cmd == "cat -n file.txt"
         assert p.timeout == 30
-        assert p.output_path == "/tmp/out"
-        assert p.cwd == "/home"
 
     def test_timeout_min(self) -> None:
         with pytest.raises(Exception):
@@ -737,27 +733,6 @@ class TestBashCall:
         assert isinstance(result, ToolError)
         assert "Timeout" in result.brief
 
-    async def test_with_output_path(self, mock_session: MagicMock, tmp_path: Path) -> None:
-        f = tmp_path / "src.txt"
-        out = tmp_path / "dst.txt"
-        f.write_text("output_path_test", encoding="utf-8")
-        bash = Bash(session=mock_session)
-        # Use forward slashes so bash does not interpret backslashes as escapes
-        posix_path = str(f).replace("\\", "/")
-        params = BashParams(cmd=f"cat {posix_path}", output_path=str(out))
-        result = await bash(params)
-        assert isinstance(result, ToolOk)
-        assert "saved to file" in result.output
-        assert "output_path_test" in out.read_text(encoding="utf-8")
-
-    async def test_with_cwd(self, mock_session: MagicMock, tmp_path: Path) -> None:
-        bash = Bash(session=mock_session)
-        params = BashParams(cmd="pwd", cwd=str(tmp_path))
-        result = await bash(params)
-        assert isinstance(result, ToolOk)
-        # Git bash on Windows translates Windows paths to Unix-style paths (e.g. /c/... or /tmp/...)
-        assert tmp_path.name in result.output or str(tmp_path).replace("\\", "/") in result.output
-
     async def test_bash_not_found_fallback(self, mock_session: MagicMock) -> None:
         """When bash is not found, Bash.__init__ raises SkipThisTool."""
         with patch("kimix.tools.file.bash.bash_tool.find_bash", return_value=None):
@@ -975,7 +950,7 @@ class TestComplexCommands:
         (tmp_path / "b.txt").write_text("b")
         bash = Bash(session=mock_session)
         posix = str(tmp_path).replace("\\", "/")
-        params = BashParams(cmd=f"cd {posix} && ls *.txt", cwd=str(tmp_path))
+        params = BashParams(cmd=f"cd {posix} && ls *.txt")
         result = await bash(params)
         assert isinstance(result, ToolOk)
         assert "a.txt" in result.output

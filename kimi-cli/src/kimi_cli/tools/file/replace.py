@@ -1,5 +1,4 @@
 import asyncio
-from collections.abc import Callable
 from pathlib import Path
 from stat import S_ISREG
 from typing import override
@@ -17,7 +16,6 @@ from kimi_cli.soul.approval import Approval
 from kimi_cli.tools.display import DisplayBlock
 from kimi_cli.tools.file import FileActions
 from kimi_cli.tools.file.check_fmt import check_json_text, check_toml_text, check_xml_text, check_yaml_text
-from kimi_cli.tools.file.plan_mode import inspect_plan_edit_target
 from kimi_cli.tools.utils import load_desc
 from kimi_cli.utils.diff import build_diff_blocks
 from kimi_cli.utils.logging import logger
@@ -54,16 +52,6 @@ class EditFile(CallableTool2[Params]):
         self._approval = approval
         self._session = session
         self._vfs = vfs
-        self._plan_mode_checker: Callable[[], bool] | None = None
-        self._plan_file_path_getter: Callable[[], Path | None] | None = None
-
-    def bind_plan_mode(
-        self, checker: Callable[[], bool], path_getter: Callable[[], Path | None]
-    ) -> None:
-        """Bind plan mode state checker and plan file path getter."""
-        self._plan_mode_checker = checker
-        self._plan_file_path_getter = path_getter
-
     async def _validate_path(self, path: KaosPath) -> tuple[ToolError | None, bool]:
         """Validate that the path is safe to edit.
 
@@ -261,7 +249,7 @@ class EditFile(CallableTool2[Params]):
 
         if not self._session.file_mtime.mark_dirty(params.path):
             return ToolError(
-                message="File modified, read file first.",
+                message=f"File modified, read file first. Path: {display_path}",
                 brief="File modified",
             )
 
@@ -278,18 +266,6 @@ class EditFile(CallableTool2[Params]):
 
             p = await resolve_vfs(params.path, self._vfs, for_write=True)
 
-            plan_target = inspect_plan_edit_target(
-                logical_path,
-                plan_mode_checker=self._plan_mode_checker,
-                plan_file_path_getter=self._plan_file_path_getter,
-            )
-            if isinstance(plan_target, ToolError):
-                if _outside:
-                    plan_target.message = f"[out of work-dir] {plan_target.message}"
-                return plan_target
-
-            is_plan_file_edit = plan_target.is_plan_target
-
             try:
                 st = await p.stat()
                 if not S_ISREG(st.st_mode):
@@ -298,15 +274,6 @@ class EditFile(CallableTool2[Params]):
                         brief="Invalid path",
                     )
             except FileNotFoundError:
-                if is_plan_file_edit:
-                    return ToolError(
-                        message=(
-                            f"{'[out of work-dir] ' if _outside else ''}"
-                            "The current plan file does not exist yet. "
-                            "Use WriteFile to create it before calling EditFile."
-                        ),
-                        brief="Plan file not created",
-                    )
                 return ToolError(
                     message=f"{'[out of work-dir] ' if _outside else ''}`{display_logical_path}` does not exist.",
                     brief="File not found",
@@ -351,16 +318,14 @@ class EditFile(CallableTool2[Params]):
                 else FileActions.EDIT_OUTSIDE
             )
 
-            # Plan file edits are auto-approved; all other edits need approval.
-            if not is_plan_file_edit:
-                result = await self._approval.request(
-                    self.name,
-                    action,
-                    f"Edit file `{display_logical_path}`",
-                    display=diff_blocks,
-                )
-                if not result:
-                    return result.rejection_error()
+            result = await self._approval.request(
+                self.name,
+                action,
+                f"Edit file `{display_logical_path}`",
+                display=diff_blocks,
+            )
+            if not result:
+                return result.rejection_error()
 
             # Fix JSON format before writing if needed
             file_path_str = str(logical_path)
@@ -416,7 +381,7 @@ class EditFile(CallableTool2[Params]):
             except Exception:
                 pass
             return ToolError(
-                message=f"{'[out of work-dir] ' if _outside_ex else ''}Failed to edit. Error: {e}",
+                message=f"{'[out of work-dir] ' if _outside_ex else ''}Failed to edit. Error: {e} Path: {display_path}",
                 brief="Failed to edit file",
             )
         except MemoryError:
