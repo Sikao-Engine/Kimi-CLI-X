@@ -13,7 +13,7 @@ Usage:
 
 from __future__ import annotations
 
-import json
+import orjson
 import shutil
 import subprocess
 import sys
@@ -109,7 +109,7 @@ def _try_github_download(
             headers={"Accept": "application/vnd.github+json", "User-Agent": "kimix-installer"},
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            data = orjson.loads(resp.read().decode("utf-8"))
     except Exception as exc:
         print(f"GitHub API query failed: {exc}")
         return False
