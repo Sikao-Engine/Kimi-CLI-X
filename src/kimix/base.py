@@ -868,6 +868,11 @@ def get_skill_dirs(use_kaos_path: bool = True) -> list[Any]:
     _default_skill_dirs = [
         p for rel in COMMON_SKILL_DIRS if (p := Path(os.curdir) / rel).exists()
     ]
+    # If there's a `skills` subdirectory under the skill dir, use `*/skills` pattern
+    _default_skill_dirs = [
+        p / "*/skills" if (p / "skills").is_dir() else p
+        for p in _default_skill_dirs
+    ]
     if _default_skill_dirs:
         for d in _default_skill_dirs:
             print_debug(f"skill dir: {str(d)}")

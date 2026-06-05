@@ -346,10 +346,12 @@ FIELD_ALIASES_FILE: dict[str, str] = {
     "find": "old",
     "target": "old",
     "old_str": "old",
+    "old_string": "old",
     "old_content": "old",
     "replace_with": "new",
     "to": "new",
     "new_str": "new",
+    "new_string": "new",
     "new_content": "new",
     "all": "replace_all",
     # output_path / destination
@@ -632,8 +634,13 @@ def _repair_dict_for_model(
     1. Map exact field names and declared aliases.
     2. For remaining missing fields, try common LLM aliases.
     3. Fuzzy-match unmapped keys to missing fields.
-    4. Clamp numeric values that exceed field constraints.
-    5. Recurse into nested BaseModel fields and list items.
+    4. Recurse into nested BaseModel fields and list items.
+    5. Clamp numeric values that exceed field constraints.
+    6. Wrap/unwrap list ↔ scalar mismatches (LLMs often send a single value
+       for a list field, or a single-element list for a scalar field).
+    7. Apply type coercion for common LLM type mistakes (string→int/float/bool,
+       int↔float).
+    8. Strip unmapped keys when the model has ``extra="forbid"``.
     """
     if common_aliases is None:
         common_aliases = _COMMON_FIELD_ALIASES
@@ -711,16 +718,142 @@ def _repair_dict_for_model(
             if clamped is not None:
                 mapped[fname] = clamped
 
+    # Fifth pass: wrap/unwrap list ↔ scalar mismatches.
+    for fname, finfo in model.model_fields.items():
+        if fname not in mapped:
+            continue
+        val = mapped[fname]
+        origin = typing.get_origin(finfo.annotation)
+        origin_name = getattr(origin, "__name__", "") if origin is not None else ""
+        is_list_field = origin_name == "list"
+        if is_list_field and not isinstance(val, list):
+            # LLM sent a scalar for a list field — wrap it.
+            mapped[fname] = [val]
+        elif not is_list_field and isinstance(val, list) and len(val) == 1:
+            # LLM sent a single-element list for a scalar field — unwrap it.
+            # Only unwrap if the annotation is NOT a list type.
+            mapped[fname] = val[0]
+
+    # Sixth pass: type coercion for common LLM type mistakes.
+    for fname, finfo in model.model_fields.items():
+        if fname not in mapped:
+            continue
+        val = mapped[fname]
+        if val is None:
+            continue
+        annotation = finfo.annotation
+        # Resolve the target type, handling Optional/Union.
+        target_type = _resolve_scalar_type(annotation)
+        if target_type is None:
+            continue
+        coerced = _coerce_value(val, target_type)
+        if coerced is not None:
+            mapped[fname] = coerced
+
+    # Seventh pass: strip unmapped keys for "extra=forbid" models.
+    extra_setting = model.model_config.get("extra")
+    if extra_setting == "forbid":
+        valid_field_names = set(model.model_fields.keys())
+        mapped = {k: v for k, v in mapped.items() if k in valid_field_names}
+
     return mapped
+
+
+def _resolve_scalar_type(annotation: Any) -> type | None:
+    """Resolve a type annotation to a simple scalar type (str, int, float, bool).
+
+    Handles Optional[X], Union[X, None], X | None, and plain X.
+    Returns None if the annotation is not a simple scalar.
+    """
+    origin = typing.get_origin(annotation)
+    args = typing.get_args(annotation)
+
+    if origin is None:
+        # Plain type like str, int, float, bool
+        if annotation in (str, int, float, bool):
+            return annotation
+        return None
+
+    # Handle Union / Optional types
+    origin_name = getattr(origin, "__name__", "")
+    if origin_name in ("Union", "Optional"):
+        non_none = [a for a in args if a is not type(None)]
+        if len(non_none) == 1 and non_none[0] in (str, int, float, bool):
+            return non_none[0]
+
+    return None
+
+
+def _coerce_value(value: Any, target_type: type) -> Any | None:
+    """Attempt to coerce a value to *target_type*.  Returns None if coercion
+    is not possible or would be lossy."""
+    if isinstance(value, bool):
+        # bool is a subclass of int — don't coerce it unless target is int/float
+        if target_type is int:
+            return int(value)
+        if target_type is float:
+            return float(value)
+        if target_type is str:
+            return str(value).lower()
+        return None
+
+    if target_type is str and not isinstance(value, str):
+        if isinstance(value, (int, float)):
+            return str(value)
+        return None
+
+    if target_type is int and not isinstance(value, int):
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except (ValueError, TypeError):
+                pass
+        if isinstance(value, float) and value == int(value):
+            # Only coerce if no precision loss
+            return int(value)
+        return None
+
+    if target_type is float and not isinstance(value, float):
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                pass
+        if isinstance(value, int):
+            return float(value)
+        return None
+
+    if target_type is bool and not isinstance(value, bool):
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in ("true", "1", "yes", "on"):
+                return True
+            if lowered in ("false", "0", "no", "off", ""):
+                return False
+        if isinstance(value, int):
+            return bool(value)
+        return None
+
+    return None
+
+
+# Known lowercase Python/JSONSchema builtin type names that Pydantic may
+# include in error locations as union-branch discriminators.  These are NOT
+# real field names and must be filtered out of error paths.
+_BUILTIN_TYPE_NAMES: frozenset[str] = frozenset({
+    "str", "int", "float", "bool", "list", "dict", "tuple", "set",
+    "frozenset", "bytes", "None", "none", "null", "object", "array",
+    "number", "string", "boolean", "integer",
+})
 
 
 def _clean_error_loc(loc: tuple[str | int, ...]) -> str:
     """Remove union-discriminator noise from a Pydantic error location.
 
-    Pydantic v2 includes union-branch names (e.g. ``Edit``, ``list[Edit]``)
-    in ``loc`` tuples.  This makes the path hard for an LLM to read and
-    often points to a branch that was *not* intended.  We keep only the
-    real field / index segments.
+    Pydantic v2 includes union-branch names (e.g. ``Edit``, ``list[Edit]``,
+    ``str``, ``int``) in ``loc`` tuples.  This makes the path hard for an
+    LLM to read and often points to a branch that was *not* intended.  We
+    keep only the real field / index segments.
     """
     cleaned: list[str] = []
     for part in loc:
@@ -731,6 +864,10 @@ def _clean_error_loc(loc: tuple[str | int, ...]) -> str:
         # codebase are snake_case; integers are list indices.
         stripped = s.lstrip("_")
         if (stripped and stripped[:1].isupper()) or "[" in s:
+            continue
+        # Filter lowercase builtin type names that Pydantic uses as
+        # union-branch discriminators (e.g. ``"value", "str"``).
+        if stripped in _BUILTIN_TYPE_NAMES:
             continue
         cleaned.append(s)
     return ".".join(cleaned) if cleaned else ".".join(str(p) for p in loc)
@@ -764,6 +901,7 @@ def _format_pydantic_validation_error(
             lines.append(f"  Received: {inp_str}")
 
         # Actionable hints for common error types
+        ctx = err.get("ctx", {})
         match err_type:
             case "missing":
                 lines.append("  Hint: this field is required but was not provided.")
@@ -780,7 +918,11 @@ def _format_pydantic_validation_error(
             case "float_type":
                 lines.append("  Hint: this field should be a number.")
             case "literal_error":
-                lines.append("  Hint: the value must be one of the allowed options.")
+                expected = ctx.get("expected", "")
+                if expected:
+                    lines.append(f"  Hint: the value must be one of: {expected}")
+                else:
+                    lines.append("  Hint: the value must be one of the allowed options.")
             case "extra_forbidden":
                 lines.append(
                     "  Hint: this field is not recognized — remove it or check the schema."
@@ -791,16 +933,95 @@ def _format_pydantic_validation_error(
                 lines.append("  Hint: the value is too short.")
             case "too_long":
                 lines.append("  Hint: the value is too long.")
+            case "enum":
+                expected = ctx.get("expected", "")
+                if expected:
+                    lines.append(f"  Hint: this value is not one of the allowed options: {expected}")
+                else:
+                    lines.append("  Hint: this value is not one of the allowed options.")
+            case "value_error":
+                lines.append("  Hint: this value is invalid — check field constraints.")
+            case "union_tag_not_found":
+                lines.append("  Hint: a required discriminator field is missing.")
+            case "union_tag_invalid":
+                tag = ctx.get("discriminator", "")
+                if tag:
+                    lines.append(f"  Hint: the discriminator value for '{tag}' is not recognized.")
+                else:
+                    lines.append("  Hint: the discriminator value is not recognized.")
+            case "model_type":
+                lines.append("  Hint: this field should be a JSON object (dict).")
+            case "pattern_mismatch":
+                pat = ctx.get("pattern", "")
+                if pat:
+                    lines.append(f"  Hint: the string does not match the required pattern '{pat}'.")
+                else:
+                    lines.append("  Hint: the string does not match the required pattern.")
+            case "multiple_of":
+                mult = ctx.get("multiple_of", "?")
+                lines.append(f"  Hint: the number must be a multiple of {mult}.")
+            case "finite_number":
+                lines.append("  Hint: the value must be a finite number (not NaN or Infinity).")
+            case "set_type":
+                lines.append("  Hint: this field should be a set/array.")
+            case "tuple_type":
+                lines.append("  Hint: this field should be a tuple/array.")
+            case "date_type":
+                lines.append("  Hint: this field should be a valid date.")
+            case "datetime_type":
+                lines.append("  Hint: this field should be a valid datetime.")
+            case "time_type":
+                lines.append("  Hint: this field should be a valid time.")
+            case "json_type":
+                lines.append("  Hint: this field should be a valid JSON string.")
+            case "json_invalid":
+                lines.append("  Hint: the JSON string is invalid.")
+            case "url_scheme":
+                allowed = ctx.get("allowed_schemes", "")
+                if allowed:
+                    lines.append(f"  Hint: the URL scheme must be one of: {allowed}")
+                else:
+                    lines.append("  Hint: the URL scheme is not allowed.")
+            case "none_required":
+                lines.append("  Hint: this field must be null/None.")
+            case "invalid_key":
+                lines.append("  Hint: one or more keys in the object are invalid.")
+            case "get_attribute_error":
+                lines.append("  Hint: an attribute access error occurred.")
+            case "bytes_too_long":
+                lines.append("  Hint: the byte string is too long.")
+            case "bytes_too_short":
+                lines.append("  Hint: the byte string is too short.")
+            case "decimal_max_digits":
+                lines.append("  Hint: the number has too many digits.")
+            case "decimal_max_places":
+                lines.append("  Hint: the number has too many decimal places.")
+            case "recursion_loop":
+                lines.append("  Hint: the data structure contains a recursion loop.")
             case _ if err_type.startswith("greater_than"):
                 lines.append("  Hint: the value is too small.")
             case _ if err_type.startswith("less_than"):
                 lines.append("  Hint: the value is too large.")
+            case _:
+                # Fallback: produce a generic hint for unknown error types
+                lines.append(f"  Hint: check the field constraints (error type: {err_type}).")
 
+    # Only include the full JSON schema when the errors suggest structural
+    # confusion (extra fields, discriminator issues) or when there are many
+    # errors (>2), to keep simple error messages concise.
     if params_schema is not None:
-        lines.append("")
-        lines.append("Expected JSON schema:")
-        schema_str = orjson.dumps(params_schema, option=orjson.OPT_INDENT_2).decode()
-        lines.append(schema_str)
+        structural_error_types = frozenset({
+            "extra_forbidden", "union_tag_not_found", "union_tag_invalid",
+        })
+        has_structural_error = any(
+            e.get("type", "") in structural_error_types
+            for e in error.errors()
+        )
+        if has_structural_error or len(error.errors()) > 2:
+            lines.append("")
+            lines.append("Expected JSON schema:")
+            schema_str = orjson.dumps(params_schema, option=orjson.OPT_INDENT_2).decode()
+            lines.append(schema_str)
 
     return "\n".join(lines)
 
@@ -887,18 +1108,25 @@ class CallableTool2[Params: BaseModel](ABC):
             params = self.params.model_validate(arguments)
         except pydantic.ValidationError as e:
             # Attempt to repair common LLM field-name mismatches and re-validate.
+            repair_attempted = False
             if isinstance(arguments, dict):
                 repaired = _repair_dict_for_model(arguments, self.params, self.field_aliases)
                 if repaired != arguments:
+                    repair_attempted = True
                     try:
                         params = self.params.model_validate(repaired)
                     except pydantic.ValidationError:
                         pass  # fall through to return the original error
                     else:
                         return await self.__call__(params)
-            return ToolValidateError(
-                _format_pydantic_validation_error(e, self.name, self.base.parameters)
-            )
+            message = _format_pydantic_validation_error(e, self.name, self.base.parameters)
+            if repair_attempted:
+                message += (
+                    "\n\nNote: automatic argument repair was attempted "
+                    "but could not resolve all issues. Please review the "
+                    "schema and correct the arguments manually."
+                )
+            return ToolValidateError(message)
 
         ret = await self.__call__(params)
         if not isinstance(ret, ToolReturnValue):  # type: ignore[reportUnnecessaryIsInstance]

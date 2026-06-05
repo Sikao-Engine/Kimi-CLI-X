@@ -619,6 +619,7 @@ def test_format_validation_error_basic() -> None:
 
 
 def test_format_validation_error_includes_schema() -> None:
+    """Schema is included for >2 errors or structural error types."""
     class _Inner(BaseModel):
         value: str
 
@@ -637,12 +638,35 @@ def test_format_validation_error_includes_schema() -> None:
         },
     }
 
+    # With 2 errors of type "missing", schema is NOT included (not structural).
     try:
         _Params.model_validate({"inner": {}})
     except pydantic.ValidationError as e:
         msg = _format_pydantic_validation_error(e, "TestTool", schema)
+        assert "Expected JSON schema:" not in msg
+
+    # With >2 errors, schema IS included.
+    class _MultiParams(BaseModel):
+        a: str
+        b: int
+        c: float
+
+    try:
+        _MultiParams.model_validate({})
+    except pydantic.ValidationError as e:
+        msg = _format_pydantic_validation_error(e, "TestTool", schema)
         assert "Expected JSON schema:" in msg
-        assert '"name"' in msg
+
+    # With structural error (extra_forbidden), schema IS included.
+    class _StrictParams(BaseModel):
+        model_config = {"extra": "forbid"}
+        name: str
+
+    try:
+        _StrictParams.model_validate({"name": "ok", "extra": 1})
+    except pydantic.ValidationError as e:
+        msg = _format_pydantic_validation_error(e, "TestTool", schema)
+        assert "Expected JSON schema:" in msg
 
 
 def test_format_validation_error_extra_forbidden() -> None:
@@ -677,5 +701,365 @@ def test_callable_tool2_returns_formatted_validation_error() -> None:
     assert isinstance(result, ToolValidateError)
     assert "Invalid arguments for tool `bad`" in result.message
     assert "`command` — Field required" in result.message
-    assert "Expected JSON schema:" in result.message
-    assert "command" in result.message
+    # Schema is NOT included for a single non-structural error.
+    assert "Expected JSON schema:" not in result.message
+
+
+# ---------------------------------------------------------------------------
+# 8. Tests for _clean_error_loc builtin type-name filtering (Fix 1)
+# ---------------------------------------------------------------------------
+
+
+def test_clean_error_loc_filters_str_branch() -> None:
+    """Union[str, Edit] loc containing 'str' should not include 'str'."""
+    assert _clean_error_loc(("value", "str")) == "value"
+
+
+def test_clean_error_loc_filters_int_branch() -> None:
+    """Union[int, Edit] loc containing 'int' should not include 'int'."""
+    assert _clean_error_loc(("items", 0, "int")) == "items.0"
+
+
+def test_clean_error_loc_filters_float_branch() -> None:
+    """Union[float, ...] loc containing 'float' should not include 'float'."""
+    assert _clean_error_loc(("ratio", "float")) == "ratio"
+
+
+def test_clean_error_loc_filters_bool_branch() -> None:
+    """Union[bool, ...] loc containing 'bool' should not include 'bool'."""
+    assert _clean_error_loc(("enabled", "bool")) == "enabled"
+
+
+def test_clean_error_loc_filters_none_branch() -> None:
+    """Union[None, ...] loc containing 'None' should not include 'None'."""
+    assert _clean_error_loc(("optional", "None")) == "optional"
+
+
+def test_clean_error_loc_filters_list_branch() -> None:
+    """Union[list, ...] loc containing 'list' should not include 'list'."""
+    assert _clean_error_loc(("data", "list")) == "data"
+
+
+def test_clean_error_loc_filters_dict_branch() -> None:
+    """Union[dict, ...] loc containing 'dict' should not include 'dict'."""
+    assert _clean_error_loc(("config", "dict")) == "config"
+
+
+# ---------------------------------------------------------------------------
+# 9. Tests for expanded error-type handlers (Fix 2)
+# ---------------------------------------------------------------------------
+
+
+def test_format_validation_error_enum() -> None:
+    """enum error shows allowed options."""
+    from enum import Enum
+
+    class Color(str, Enum):
+        RED = "red"
+        GREEN = "green"
+
+    class _Params(BaseModel):
+        color: Color
+
+    try:
+        _Params.model_validate({"color": "blue"})
+    except pydantic.ValidationError as e:
+        msg = _format_pydantic_validation_error(e, "Test")
+        assert "not one of the allowed options" in msg
+
+
+def test_format_validation_error_literal_with_expected() -> None:
+    """literal_error hint shows the expected values."""
+    from typing import Literal
+
+    class _Params(BaseModel):
+        mode: Literal["read", "write", "append"]
+
+    try:
+        _Params.model_validate({"mode": "delete"})
+    except pydantic.ValidationError as e:
+        msg = _format_pydantic_validation_error(e, "Test")
+        assert "must be one of" in msg
+
+
+def test_format_validation_error_value_error() -> None:
+    """value_error hint is shown."""
+    class _Params(BaseModel):
+        @pydantic.field_validator("name")
+        @classmethod
+        def name_must_not_be_empty(cls, v: str) -> str:
+            if not v.strip():
+                raise ValueError("name must not be empty")
+            return v
+        name: str
+
+    try:
+        _Params.model_validate({"name": "  "})
+    except pydantic.ValidationError as e:
+        msg = _format_pydantic_validation_error(e, "Test")
+        assert "check field constraints" in msg
+
+
+def test_format_validation_error_model_type() -> None:
+    """model_type error has a hint."""
+    class _Inner(BaseModel):
+        x: int
+
+    class _Params(BaseModel):
+        inner: _Inner
+
+    try:
+        _Params.model_validate({"inner": "not_a_dict"})
+    except pydantic.ValidationError as e:
+        msg = _format_pydantic_validation_error(e, "Test")
+        assert "JSON object" in msg
+
+
+def test_format_validation_error_date_type() -> None:
+    """date_type error has a hint."""
+    from datetime import date
+
+    class _Params(BaseModel):
+        d: date
+
+    try:
+        _Params.model_validate({"d": "not_a_date"})
+    except pydantic.ValidationError as e:
+        msg = _format_pydantic_validation_error(e, "Test")
+        assert "valid date" in msg
+
+
+def test_format_validation_error_finite_number() -> None:
+    """finite_number error has a hint."""
+    class _Params(BaseModel):
+        value: float
+
+    try:
+        _Params.model_validate({"value": float("nan")})
+    except pydantic.ValidationError as e:
+        msg = _format_pydantic_validation_error(e, "Test")
+        assert "finite number" in msg
+
+
+def test_format_validation_error_none_required() -> None:
+    """none_required error has a hint."""
+    class _Params(BaseModel):
+        value: None = None
+
+    try:
+        _Params.model_validate({"value": "not_none"})
+    except pydantic.ValidationError as e:
+        msg = _format_pydantic_validation_error(e, "Test")
+        assert "null/None" in msg
+
+
+# ---------------------------------------------------------------------------
+# 10. Tests for type coercion in _repair_dict_for_model (Fix 4)
+# ---------------------------------------------------------------------------
+
+
+def test_repair_dict_type_coercion_str_to_int() -> None:
+    class Params(BaseModel):
+        count: int
+
+    repaired = _repair_dict_for_model({"count": "5"}, Params)
+    assert repaired == {"count": 5}
+    assert isinstance(repaired["count"], int)
+
+
+def test_repair_dict_type_coercion_str_to_float() -> None:
+    class Params(BaseModel):
+        ratio: float
+
+    repaired = _repair_dict_for_model({"ratio": "0.75"}, Params)
+    assert repaired == {"ratio": 0.75}
+    assert isinstance(repaired["ratio"], float)
+
+
+def test_repair_dict_type_coercion_str_to_bool_true() -> None:
+    class Params(BaseModel):
+        enabled: bool
+
+    repaired = _repair_dict_for_model({"enabled": "true"}, Params)
+    assert repaired == {"enabled": True}
+    assert isinstance(repaired["enabled"], bool)
+
+
+def test_repair_dict_type_coercion_str_to_bool_false() -> None:
+    class Params(BaseModel):
+        enabled: bool
+
+    repaired = _repair_dict_for_model({"enabled": "false"}, Params)
+    assert repaired == {"enabled": False}
+
+
+def test_repair_dict_type_coercion_int_to_str() -> None:
+    class Params(BaseModel):
+        name: str
+
+    repaired = _repair_dict_for_model({"name": 123}, Params)
+    assert repaired == {"name": "123"}
+
+
+def test_repair_dict_type_coercion_int_to_float() -> None:
+    class Params(BaseModel):
+        value: float
+
+    repaired = _repair_dict_for_model({"value": 42}, Params)
+    assert repaired == {"value": 42.0}
+    assert isinstance(repaired["value"], float)
+
+
+def test_repair_dict_type_coercion_float_to_int_no_loss() -> None:
+    class Params(BaseModel):
+        count: int
+
+    repaired = _repair_dict_for_model({"count": 10.0}, Params)
+    assert repaired == {"count": 10}
+    assert isinstance(repaired["count"], int)
+
+
+def test_repair_dict_type_coercion_float_to_int_lossy_skipped() -> None:
+    class Params(BaseModel):
+        count: int
+
+    repaired = _repair_dict_for_model({"count": 10.5}, Params)
+    assert repaired == {"count": 10.5}  # unchanged — lossy
+
+
+def test_repair_dict_type_coercion_invalid_str_to_int_skipped() -> None:
+    class Params(BaseModel):
+        count: int
+
+    repaired = _repair_dict_for_model({"count": "abc"}, Params)
+    assert repaired == {"count": "abc"}  # unchanged — not parseable
+
+
+# ---------------------------------------------------------------------------
+# 11. Tests for list ↔ scalar wrapping/unwrapping (Fix 5)
+# ---------------------------------------------------------------------------
+
+
+def test_repair_dict_list_scalar_wrap() -> None:
+    """Scalar value for list field is wrapped in a list."""
+    class Params(BaseModel):
+        items: list[str]
+
+    repaired = _repair_dict_for_model({"items": "hello"}, Params)
+    assert repaired == {"items": ["hello"]}
+
+
+def test_repair_dict_list_scalar_unwrap() -> None:
+    """Single-element list for scalar field is unwrapped."""
+    class Params(BaseModel):
+        name: str
+
+    repaired = _repair_dict_for_model({"name": ["hello"]}, Params)
+    assert repaired == {"name": "hello"}
+
+
+def test_repair_dict_list_scalar_multi_element_not_unwrapped() -> None:
+    """Multi-element list for scalar field is NOT unwrapped."""
+    class Params(BaseModel):
+        name: str
+
+    original = {"name": ["a", "b"]}
+    repaired = _repair_dict_for_model(original, Params)
+    assert repaired == original  # unchanged
+
+
+def test_repair_dict_list_scalar_already_list() -> None:
+    """List value for list field stays as list."""
+    class Params(BaseModel):
+        items: list[str]
+
+    repaired = _repair_dict_for_model({"items": ["a", "b"]}, Params)
+    assert repaired == {"items": ["a", "b"]}
+
+
+def test_repair_dict_list_scalar_optional_str() -> None:
+    """Single-element list for Optional[str] field is unwrapped."""
+    class Params(BaseModel):
+        name: str | None = None
+
+    repaired = _repair_dict_for_model({"name": ["hello"]}, Params)
+    assert repaired == {"name": "hello"}
+
+
+# ---------------------------------------------------------------------------
+# 12. Tests for extra="forbid" unmapped key stripping (Fix 6)
+# ---------------------------------------------------------------------------
+
+
+def test_repair_dict_extra_forbid_strips_unmapped() -> None:
+    """Unmapped keys are stripped when model has extra='forbid'."""
+    class Params(BaseModel):
+        model_config = {"extra": "forbid"}
+        name: str
+
+    repaired = _repair_dict_for_model({"name": "test", "extra_field": 123}, Params)
+    assert repaired == {"name": "test"}
+    assert "extra_field" not in repaired
+
+
+def test_repair_dict_extra_allow_keeps_unmapped() -> None:
+    """Unmapped keys are kept when model has extra='allow' (default)."""
+    class Params(BaseModel):
+        name: str
+
+    original = {"name": "test", "extra": 123}
+    repaired = _repair_dict_for_model(original, Params)
+    assert repaired == original
+
+
+# ---------------------------------------------------------------------------
+# 13. Tests for repair-failure note (Fix 8)
+# ---------------------------------------------------------------------------
+
+
+def test_callable_tool2_repair_failure_note() -> None:
+    """When repair is attempted but fails, a note is included in the error."""
+
+    class Params(BaseModel):
+        model_config = {"extra": "forbid"}
+        title: str
+
+    class TestTool(CallableTool2[Params]):
+        name: str = "test"
+        description: str = "test"
+        params: type[Params] = Params
+        field_aliases: ClassVar[dict[str, str]] = {}
+
+        @override
+        async def __call__(self, params: Params) -> ToolReturnValue:
+            return ToolOk(output=params.title)
+
+    tool = TestTool()
+    # Send an extra field that repair will strip (extra="forbid"), but
+    # the required `title` field is still missing. Repair changes the dict
+    # (removes the extra field) but validation still fails.
+    result = asyncio.run(tool.call({"content": "hello"}))
+    assert isinstance(result, ToolValidateError)
+    assert "automatic argument repair was attempted" in result.message
+
+
+def test_callable_tool2_no_repair_note_when_repair_not_attempted() -> None:
+    """When repair is NOT attempted (arguments not a dict), no note is added."""
+
+    class Params(BaseModel):
+        title: str
+
+    class TestTool(CallableTool2[Params]):
+        name: str = "test"
+        description: str = "test"
+        params: type[Params] = Params
+
+        @override
+        async def __call__(self, params: Params) -> ToolReturnValue:
+            return ToolOk(output=params.title)
+
+    tool = TestTool()
+    # Pass a string (not a dict) — repair won't be attempted.
+    result = asyncio.run(tool.call("not_a_dict"))
+    assert isinstance(result, ToolValidateError)
+    assert "automatic argument repair was attempted" not in result.message
