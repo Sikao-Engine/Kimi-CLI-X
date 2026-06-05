@@ -14,7 +14,7 @@ from kimi_cli.tools import SkipThisTool
 from kimi_cli.tools.display import ShellDisplayBlock
 
 from kimix.tools.common import _maybe_export_output_async, ProcessTask, _DEFAULT_FORBIDDEN_COMMANDS
-from kimix.tools.file.run import find_bash, USE_SYSTEM_SHELL
+from kimix.tools.file.run import find_bash, USE_SYSTEM_SHELL, USE_SYSTEM_PWSH_ON_WINDOWS
 
 if TYPE_CHECKING:
     from kimi_agent_sdk import CallableTool2 as _CallableTool2
@@ -364,10 +364,10 @@ class Bash(CallableTool2[BashParams]):
 
     def __init__(self, session: Session):
         super().__init__()
-        self._session = session
         if not USE_SYSTEM_SHELL:
             raise SkipThisTool()
-        if sys.platform == "win32":
+        self._session = session
+        if sys.platform == "win32" and USE_SYSTEM_PWSH_ON_WINDOWS:
             raise SkipThisTool()
         self._bash = find_bash()
         if not self._bash:

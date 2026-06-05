@@ -18,7 +18,8 @@ import shutil
 _HUGE_CMD_THRESHOLD = 10000
 """Character count above which command display is culled to only the path."""
 
-USE_SYSTEM_SHELL = True
+USE_SYSTEM_PWSH_ON_WINDOWS = True
+USE_SYSTEM_SHELL = False
 
 @functools.lru_cache(maxsize=1)
 def find_bash() -> str | None:
@@ -408,7 +409,7 @@ class Run(CallableTool2[RunParams]):
         os.environ['PYTHONIOENCODING'] = 'utf-8'
         super().__init__()
         if USE_SYSTEM_SHELL:
-            if sys.platform == "win32":
+            if sys.platform == "win32" and USE_SYSTEM_PWSH_ON_WINDOWS:
                 if find_pwsh():
                     raise SkipThisTool()
             else:
