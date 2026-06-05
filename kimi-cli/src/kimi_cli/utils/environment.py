@@ -35,7 +35,7 @@ class Environment:
     os_kind: Literal["Windows", "Linux", "macOS"] | str
     os_arch: str
     os_version: str
-    shell_name: Literal["bash", "sh"]
+    shell_name: str
     shell_path: KaosPath
 
     @staticmethod
@@ -54,47 +54,50 @@ class Environment:
         os_version = platform.version()
 
         if os_kind == "Windows":
-            shell_name = "Windows PowerShell"
-            system_root = os.environ.get("SYSTEMROOT", r"C:\Windows")
-            possible_paths : list[KaosPath]= []
+            candidates: list[tuple[str, KaosPath]] = []
 
-            # Try to find PowerShell Core (pwsh) using where.exe
+            # 1. pwsh
             try:
-                # pwsh
-                process = await kaos.exec("where.exe", "pwsh")
-                stdout_task = asyncio.create_task(process.stdout.read())
-                exit_code = await process.wait()
-                stdout_data = await stdout_task
-                if exit_code == 0:
-                    pwsh_path = stdout_data.decode("utf-8").strip().splitlines()[0]
-                    if pwsh_path:
-                        possible_paths.append(KaosPath(pwsh_path))
-                # powershell
-                process = await kaos.exec("where.exe", "powershell")
-                stdout_task = asyncio.create_task(process.stdout.read())
-                exit_code = await process.wait()
-                stdout_data = await stdout_task
-                if exit_code == 0:
-                    powershell_path = stdout_data.decode("utf-8").strip().splitlines()[0]
-                    if powershell_path:
-                        possible_paths.append(KaosPath(powershell_path))
+                proc = await kaos.exec("where.exe", "pwsh")
+                out = await asyncio.create_task(proc.stdout.read())
+                if await proc.wait() == 0:
+                    p = out.decode("utf-8").strip().splitlines()[0]
+                    if p:
+                        candidates.append(("pwsh", KaosPath(p)))
             except Exception:
-                pass  # where.exe failed, continue with fallback paths
+                pass
 
-            possible_paths.append(
-                KaosPath(
-                    os.path.join(
-                        system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
-                    )
-                )
-            )
-            fallback_path = KaosPath("powershell.exe")
-            for path in possible_paths:
+            # 2. powershell
+            try:
+                proc = await kaos.exec("where.exe", "powershell")
+                out = await asyncio.create_task(proc.stdout.read())
+                if await proc.wait() == 0:
+                    p = out.decode("utf-8").strip().splitlines()[0]
+                    if p:
+                        candidates.append(("powershell", KaosPath(p)))
+            except Exception:
+                pass
+
+            # 3. git bash
+            try:
+                candidates.append(("bash", await _find_git_bash_path()))
+            except GitBashNotFoundError:
+                pass
+
+            # 4. fallback
+            system_root = os.environ.get("SYSTEMROOT", r"C:\Windows")
+            candidates.append((
+                "powershell",
+                KaosPath(os.path.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
+            ))
+
+            shell_name = "powershell"
+            shell_path = KaosPath("powershell.exe")
+            for name, path in candidates:
                 if await path.is_file():
+                    shell_name = name
                     shell_path = path
                     break
-            else:
-                shell_path = fallback_path
         else:
             possible_paths = [
                 KaosPath("/bin/bash"),

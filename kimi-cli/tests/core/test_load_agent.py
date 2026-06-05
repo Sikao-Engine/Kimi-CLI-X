@@ -56,7 +56,7 @@ _WINDOWS_SHELL_HINT = "Use Unix shell syntax inside Shell commands"
 @pytest.mark.parametrize(
     "os_kind, shell, expect_shell_hint",
     [
-        ("Windows", r"bash (`C:\Program Files\Git\bin\bash.exe`)", True),
+        ("Windows", r"pwsh (`C:\Program Files\PowerShell\7\pwsh.exe`)", True),
         ("macOS", "bash (`/bin/bash`)", False),
         ("Linux", "bash (`/usr/bin/bash`)", False),
     ],

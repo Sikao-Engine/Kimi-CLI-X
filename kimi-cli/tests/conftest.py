@@ -155,7 +155,7 @@ def environment() -> Environment:
             os_kind="Windows",
             os_arch="x86_64",
             os_version="1.0",
-            shell_name="bash",
+            shell_name="pwsh",
             shell_path=KaosPath(r"C:\Program Files\Git\bin\bash.exe"),
         )
     else:
