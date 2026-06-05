@@ -510,6 +510,12 @@ _COMMON_FIELD_ALIASES: dict[str, str] = {
     **FIELD_ALIASES_SUBAGENT,
 }
 
+# Precomputed reverse lookup for the common aliases to avoid rebuilding it
+# on every call to ``_repair_dict_for_model``.
+_REVERSE_ALIASES: dict[str, list[str]] = {}
+for _bad_key, _good_key in _COMMON_FIELD_ALIASES.items():
+    _REVERSE_ALIASES.setdefault(_good_key, []).append(_bad_key)
+
 
 def _get_base_model_type(annotation: Any) -> type[BaseModel] | None:
     """Extract a BaseModel subclass from a type annotation, unwrapping generics."""
@@ -603,11 +609,31 @@ def _apply_constraints(value: Any, constraints: tuple[float | int | None, float 
 @lru_cache(maxsize=512)
 def _cached_model_field_info(model: type[BaseModel]) -> tuple[
     dict[str, str],
-    list[tuple[str, type[BaseModel] | None, tuple[float | int | None, float | int | None, bool, bool] | None]],
+    list[tuple[
+        str,
+        type[BaseModel] | None,
+        tuple[float | int | None, float | int | None, bool, bool] | None,
+        bool,
+        type | None,
+    ]],
+    bool,
+    frozenset[str],
 ]:
-    """Precompute known key mapping and field metadata for a model."""
+    """Precompute known key mapping and field metadata for a model.
+
+    Returns ``(known, field_meta, extra_forbid, valid_names)`` where
+    ``field_meta`` tuples contain:
+    ``(field_name, nested_model, constraints, is_list, scalar_type)``.
+    """
     known: dict[str, str] = {}
-    field_meta: list[tuple[str, type[BaseModel] | None, tuple[float | int | None, float | int | None, bool, bool] | None]] = []
+    field_meta: list[tuple[
+        str,
+        type[BaseModel] | None,
+        tuple[float | int | None, float | int | None, bool, bool] | None,
+        bool,
+        type | None,
+    ]] = []
+    extra_forbid = model.model_config.get("extra") == "forbid"
 
     for fname, finfo in model.model_fields.items():
         known[fname] = fname
@@ -619,9 +645,13 @@ def _cached_model_field_info(model: type[BaseModel]) -> tuple[
 
         nested = _get_base_model_type(finfo.annotation)
         constraints = _extract_constraints(finfo)
-        field_meta.append((fname, nested, constraints))
+        origin = typing.get_origin(finfo.annotation)
+        origin_name = getattr(origin, "__name__", "") if origin is not None else ""
+        is_list = origin_name == "list"
+        scalar_type = _resolve_scalar_type(finfo.annotation)
+        field_meta.append((fname, nested, constraints, is_list, scalar_type))
 
-    return known, field_meta
+    return known, field_meta, extra_forbid, frozenset(model.model_fields.keys())
 
 
 def _repair_dict_for_model(
@@ -645,7 +675,7 @@ def _repair_dict_for_model(
     if common_aliases is None:
         common_aliases = _COMMON_FIELD_ALIASES
 
-    known, field_meta = _cached_model_field_info(model)
+    known, field_meta, extra_forbid, valid_names = _cached_model_field_info(model)
 
     # First pass: map known keys.
     mapped: dict[str, Any] = {}
@@ -659,10 +689,13 @@ def _repair_dict_for_model(
             mapped[key] = value
 
     # Second pass: try common aliases for fields that are still missing.
-    # Build reverse alias map for O(1) lookup of candidate bad keys per good key.
-    reverse_aliases: dict[str, list[str]] = {}
-    for bad_key, good_key in common_aliases.items():
-        reverse_aliases.setdefault(good_key, []).append(bad_key)
+    # Use the precomputed reverse map when the default aliases are in play.
+    if common_aliases is _COMMON_FIELD_ALIASES:
+        reverse_aliases = _REVERSE_ALIASES
+    else:
+        reverse_aliases: dict[str, list[str]] = {}
+        for bad_key, good_key in common_aliases.items():
+            reverse_aliases.setdefault(good_key, []).append(bad_key)
 
     missing = set(model.model_fields.keys()) - set(mapped.keys())
     for missing_field in list(missing):
@@ -700,8 +733,8 @@ def _repair_dict_for_model(
             used.add(matched_key)
             mapped[missing_field] = mapped.pop(matched_key)
 
-    # Fourth pass: recurse into nested models and clamp numeric values.
-    for fname, nested, constraints in field_meta:
+    # Fourth pass: recurse, clamp, fix list/scalar, coerce, all in one loop.
+    for fname, nested, constraints, is_list, scalar_type in field_meta:
         if fname not in mapped:
             continue
         val = mapped[fname]
@@ -716,49 +749,31 @@ def _repair_dict_for_model(
         elif constraints is not None:
             clamped = _apply_constraints(val, constraints)
             if clamped is not None:
-                mapped[fname] = clamped
+                val = clamped
+                mapped[fname] = val
 
-    # Fifth pass: wrap/unwrap list ↔ scalar mismatches.
-    for fname, finfo in model.model_fields.items():
-        if fname not in mapped:
-            continue
-        val = mapped[fname]
-        origin = typing.get_origin(finfo.annotation)
-        origin_name = getattr(origin, "__name__", "") if origin is not None else ""
-        is_list_field = origin_name == "list"
-        if is_list_field and not isinstance(val, list):
-            # LLM sent a scalar for a list field — wrap it.
-            mapped[fname] = [val]
-        elif not is_list_field and isinstance(val, list) and len(val) == 1:
-            # LLM sent a single-element list for a scalar field — unwrap it.
-            # Only unwrap if the annotation is NOT a list type.
-            mapped[fname] = val[0]
+        # Fix list ↔ scalar mismatches.
+        if is_list and not isinstance(val, list):
+            val = [val]
+            mapped[fname] = val
+        elif not is_list and isinstance(val, list) and len(val) == 1:
+            val = val[0]
+            mapped[fname] = val
 
-    # Sixth pass: type coercion for common LLM type mistakes.
-    for fname, finfo in model.model_fields.items():
-        if fname not in mapped:
-            continue
-        val = mapped[fname]
-        if val is None:
-            continue
-        annotation = finfo.annotation
-        # Resolve the target type, handling Optional/Union.
-        target_type = _resolve_scalar_type(annotation)
-        if target_type is None:
-            continue
-        coerced = _coerce_value(val, target_type)
-        if coerced is not None:
-            mapped[fname] = coerced
+        # Type coercion for common LLM type mistakes.
+        if scalar_type is not None and val is not None:
+            coerced = _coerce_value(val, scalar_type)
+            if coerced is not None:
+                mapped[fname] = coerced
 
-    # Seventh pass: strip unmapped keys for "extra=forbid" models.
-    extra_setting = model.model_config.get("extra")
-    if extra_setting == "forbid":
-        valid_field_names = set(model.model_fields.keys())
-        mapped = {k: v for k, v in mapped.items() if k in valid_field_names}
+    # Fifth pass: strip unmapped keys for "extra=forbid" models.
+    if extra_forbid:
+        mapped = {k: v for k, v in mapped.items() if k in valid_names}
 
     return mapped
 
 
+@lru_cache(maxsize=512)
 def _resolve_scalar_type(annotation: Any) -> type | None:
     """Resolve a type annotation to a simple scalar type (str, int, float, bool).
 
@@ -879,14 +894,15 @@ def _format_pydantic_validation_error(
     params_schema: dict[str, Any] | None = None,
 ) -> str:
     """Format a pydantic ``ValidationError`` into a concise, LLM-friendly message."""
+    errors_list = error.errors()
     lines: list[str] = []
     lines.append(
         f"Invalid arguments for tool `{tool_name}` — "
-        f"{len(error.errors())} validation error(s):"
+        f"{len(errors_list)} validation error(s):"
     )
     lines.append("")
 
-    for i, err in enumerate(error.errors(), 1):
+    for i, err in enumerate(errors_list, 1):
         loc = _clean_error_loc(err["loc"])
         msg = err["msg"]
         err_type = err.get("type", "")
@@ -1015,9 +1031,9 @@ def _format_pydantic_validation_error(
         })
         has_structural_error = any(
             e.get("type", "") in structural_error_types
-            for e in error.errors()
+            for e in errors_list
         )
-        if has_structural_error or len(error.errors()) > 2:
+        if has_structural_error or len(errors_list) > 2:
             lines.append("")
             lines.append("Expected JSON schema:")
             schema_str = orjson.dumps(params_schema, option=orjson.OPT_INDENT_2).decode()
