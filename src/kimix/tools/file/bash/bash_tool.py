@@ -13,8 +13,8 @@ from kimi_cli.session import Session
 from kimi_cli.tools import SkipThisTool
 from kimi_cli.tools.display import ShellDisplayBlock
 
-from kimix.tools.common import _maybe_export_output_async, ProcessTask
-from kimix.tools.file.run import _DEFAULT_FORBIDDEN_COMMANDS, find_bash
+from kimix.tools.common import _maybe_export_output_async, ProcessTask, _DEFAULT_FORBIDDEN_COMMANDS
+from kimix.tools.file.run import find_bash, find_pwsh, USE_SYSTEM_SHELL
 
 if TYPE_CHECKING:
     from kimi_agent_sdk import CallableTool2 as _CallableTool2
@@ -365,8 +365,12 @@ class Bash(CallableTool2[BashParams]):
     def __init__(self, session: Session):
         super().__init__()
         self._session = session
+        if not USE_SYSTEM_SHELL:
+            raise SkipThisTool()
         self._bash = find_bash()
         if not self._bash:
+            raise SkipThisTool()
+        if find_pwsh():
             raise SkipThisTool()
 
         # Pre-normalize forbidden commands once at init time for O(1) per-call lookup.

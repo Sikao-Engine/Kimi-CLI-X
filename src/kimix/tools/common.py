@@ -25,6 +25,26 @@ _ERROR_KEYWORDS = [
     "connection refused", "timeout", "unhandled",
 ]
 
+_DEFAULT_FORBIDDEN_COMMANDS = [
+    "taskkill",
+    "kill",
+    "killall",
+    "pkill",
+    "xkill",
+    "rd",
+    "format",
+    "fdisk",
+    "dd",
+    "mkfs",
+    "shutdown",
+    "reboot",
+    "poweroff",
+    "halt",
+    "reg",
+    "regedit",
+    "regedt32",
+]
+
 _ERROR_PATTERN = re.compile(
     r'\b(?:' + '|'.join(re.escape(k) for k in _ERROR_KEYWORDS) + r')\b',
     re.IGNORECASE

@@ -43,7 +43,8 @@ async def cleanup_task_data(mock_session: MagicMock) -> Any:
 @pytest.fixture(autouse=True)
 def patch_find_bash() -> Any:
     with patch("kimix.tools.file.run.find_bash", return_value=None):
-        yield
+        with patch("kimix.tools.file.run.find_pwsh", return_value=None):
+            yield
 
 
 # ---------------------------------------------------------------------------

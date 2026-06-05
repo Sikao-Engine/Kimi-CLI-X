@@ -19,7 +19,8 @@ from kosong.tooling import ToolError, ToolOk
 @pytest.fixture(autouse=True)
 def patch_find_bash() -> None:
     with patch("kimix.tools.file.run.find_bash", return_value=None):
-        yield
+        with patch("kimix.tools.file.run.find_pwsh", return_value=None):
+            yield
 
 
 # ---------------------------------------------------------------------------

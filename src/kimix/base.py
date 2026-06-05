@@ -473,6 +473,8 @@ def _format_tool_args(name: str, args: str | None) -> str | None:
         match name:
             case "Bash":
                 return ", ".join(_collect("cmd", "timeout"))
+            case "Powershell":
+                return ", ".join(_collect("cmd", "timeout"))
             case "Run":
                 return ", ".join(_collect("command", "cwd", "timeout", "output_path", "env", "run_in_background"))
             case "Python":

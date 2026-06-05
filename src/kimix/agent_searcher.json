@@ -3,6 +3,7 @@
     "extend": "default",
     "tools": [
       "kimix.tools.file.bash:Bash",
+      "kimix.tools.file.bash:Powershell",
       "kimix.tools.file.run:Run",
       "kimix.tools.py:Python",
       "kimix.tools.file.input:Input",

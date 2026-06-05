@@ -9,7 +9,7 @@ from kimi_cli.tools import SkipThisTool
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from pydantic import BaseModel, Field
 from kimi_cli.session import Session
-from kimix.tools.common import _maybe_export_output_async, _export_to_temp_file_async, ProcessTask
+from kimix.tools.common import _maybe_export_output_async, _export_to_temp_file_async, ProcessTask, _DEFAULT_FORBIDDEN_COMMANDS
 from kimi_cli.tools.display import ShellDisplayBlock
 from kimi_cli.share import get_share_dir
 import functools
@@ -18,26 +18,7 @@ import shutil
 _HUGE_CMD_THRESHOLD = 10000
 """Character count above which command display is culled to only the path."""
 
-_DEFAULT_FORBIDDEN_COMMANDS = [
-    "taskkill",
-    "kill",
-    "killall",
-    "pkill",
-    "xkill",
-    "rd",
-    "format",
-    "fdisk",
-    "dd",
-    "mkfs",
-    "shutdown",
-    "reboot",
-    "poweroff",
-    "halt",
-    "reg",
-    "regedit",
-    "regedt32",
-]
-
+USE_SYSTEM_SHELL = True
 
 @functools.lru_cache(maxsize=1)
 def find_bash() -> str | None:
@@ -186,6 +167,201 @@ def find_bash() -> str | None:
     return None
 
 
+@functools.lru_cache(maxsize=1)
+def find_pwsh() -> str | None:
+    """Find the system PowerShell executable.
+
+    On Windows, prioritizes ``pwsh`` (PowerShell 7+) over ``powershell``
+    (Windows PowerShell 5.1).
+    """
+    if sys.platform != "win32":
+        return None
+
+    # Strategy 1: pwsh (PowerShell 7+) via PATH
+    pwsh_path = shutil.which("pwsh")
+    if pwsh_path:
+        return str(Path(pwsh_path).resolve())
+
+    # Strategy 2: pwsh.exe via PATH
+    pwsh_path = shutil.which("pwsh.exe")
+    if pwsh_path:
+        return str(Path(pwsh_path).resolve())
+
+    # Strategy 3: powershell (Windows PowerShell 5.1) via PATH
+    ps_path = shutil.which("powershell")
+    if ps_path:
+        return str(Path(ps_path).resolve())
+
+    # Strategy 4: powershell.exe via PATH
+    ps_path = shutil.which("powershell.exe")
+    if ps_path:
+        return str(Path(ps_path).resolve())
+
+    # Strategy 5: where command for pwsh
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["where.exe", "pwsh.exe"],
+            capture_output=True, text=True, check=True
+        )
+        return r.stdout.strip().splitlines()[0]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    # Strategy 6: where command for powershell
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["where.exe", "powershell.exe"],
+            capture_output=True, text=True, check=True
+        )
+        return r.stdout.strip().splitlines()[0]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    # Strategy 7: Common paths fallback for pwsh
+    candidates = [
+        r"C:\Program Files\PowerShell\7\pwsh.exe",
+        r"C:\Program Files (x86)\PowerShell\7\pwsh.exe",
+    ]
+    for candidate in candidates:
+        if Path(candidate).exists():
+            return str(Path(candidate).resolve())
+
+    # Strategy 8: Common paths fallback for Windows PowerShell
+    ps_candidates = [
+        r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        r"C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe",
+    ]
+    for candidate in ps_candidates:
+        if Path(candidate).exists():
+            return str(Path(candidate).resolve())
+
+    return None
+
+
+@functools.lru_cache(maxsize=1)
+def find_coreutils() -> str | None:
+    """Find the directory containing Microsoft Coreutils binaries.
+
+    On Windows, checks for ``cat.exe`` (or ``grep.exe`` / ``ls.exe``) via PATH
+    and common installation locations.  If not found, attempts a silent
+    auto-install and returns the new bin directory on success.
+
+    Returns ``None`` on non-Windows or when installation fails.
+    """
+    if sys.platform != "win32":
+        return None
+
+    share_dir = get_share_dir()
+    config_dir = share_dir / "config"
+    cache_file = config_dir / "coreutils.txt"
+    # Strategy 1: read cached config
+    if cache_file.is_file():
+        cached_path = cache_file.read_text().strip()
+        if cached_path and Path(cached_path).is_dir():
+            if (Path(cached_path) / "cat.exe").exists():
+                return cached_path
+        # Stale cache -- remove it
+        try:
+            cache_file.unlink()
+        except Exception:
+            pass
+
+    # Helper to resolve the parent bin directory from a ``which`` result.
+    def _bin_from_which(name: str) -> str | None:
+        p = shutil.which(name)
+        if p:
+            exe = Path(p).resolve()
+            if exe.parent.name.lower() == "bin":
+                return str(exe.parent)
+            # Some distributions put shims in the package root
+            return str(exe.parent)
+        return None
+
+    # Strategy 2–4: PATH lookup for cat.exe, grep.exe, ls.exe
+    for exe_name in ("cat.exe", "grep.exe", "ls.exe"):
+        bin_dir = _bin_from_which(exe_name)
+        if bin_dir:
+            # Verify it's really coreutils and not a Windows alias
+            if (Path(bin_dir) / "cat.exe").exists():
+                config_dir.mkdir(parents=True, exist_ok=True)
+                cache_file.write_text(bin_dir, encoding="utf-8")
+                return bin_dir
+
+    # Strategy 5: Common install paths
+    common_paths: list[Path] = []
+    local_appdata = Path.home() / "AppData" / "Local"
+    # WinGet package path pattern
+    if local_appdata.is_dir():
+        winget_pkgs = local_appdata / "Microsoft" / "WinGet" / "Packages"
+        if winget_pkgs.is_dir():
+            for entry in winget_pkgs.glob("Microsoft.Coreutils_*"):
+                if entry.is_dir():
+                    common_paths.append(entry / "bin")
+    # Program Files
+    common_paths.append(Path(r"C:\Program Files\Coreutils\bin"))
+    common_paths.append(Path(r"C:\Program Files (x86)\Coreutils\bin"))
+    # Share directory fallback
+    common_paths.append(share_dir / "coreutils" / "bin")
+    # Scoop default path
+    common_paths.append(Path.home() / "scoop" / "apps" / "coreutils" / "current" / "bin")
+    # Chocolatey default path
+    common_paths.append(Path(r"C:\ProgramData\chocolatey\bin"))
+
+    for candidate in common_paths:
+        if (candidate / "cat.exe").exists():
+            bin_dir = str(candidate)
+            config_dir.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(bin_dir, encoding="utf-8")
+            return bin_dir
+
+    # Strategy 6: where.exe fallback
+    try:
+        import subprocess
+
+        r = subprocess.run(
+            ["where.exe", "cat.exe"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        first = r.stdout.strip().splitlines()[0]
+        if first:
+            exe = Path(first).resolve()
+            bin_dir = str(exe.parent)
+            config_dir.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(bin_dir, encoding="utf-8")
+            return bin_dir
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    # Strategy 7: Auto-install fallback
+    try:
+        from kimix.tools.file.bash.install_coreutils import install_coreutils
+
+        print("Coreutils not found – attempting silent auto-install ...")
+        install_dir = str(share_dir / "coreutils")
+        result = install_coreutils(install_dir=install_dir)
+        if result:
+            # Retry detection strategies 1–6 after successful install
+            bin_path = Path(result)
+            if (bin_path / "cat.exe").exists():
+                config_dir.mkdir(parents=True, exist_ok=True)
+                cache_file.write_text(result, encoding="utf-8")
+                # Also update in-process PATH so subprocesses see it immediately
+                import os
+
+                current_path = os.environ.get("PATH", "")
+                if result not in current_path.split(os.pathsep):
+                    os.environ["PATH"] = result + os.pathsep + current_path
+                return result
+    except Exception:
+        pass
+
+    return None
+
+
 class RunParams(BaseModel):
     command: str = Field(
         description=(
@@ -227,8 +403,11 @@ class Run(CallableTool2[RunParams]):
         import os
         os.environ['PYTHONIOENCODING'] = 'utf-8'
         super().__init__()
-        if find_bash() is not None:
-            raise SkipThisTool()
+        if USE_SYSTEM_SHELL:
+            if find_bash() is not None:
+                raise SkipThisTool()
+            if find_pwsh():
+                raise SkipThisTool()
         self._session = session
         self._semaphore = asyncio.Semaphore(8)
         self.use_posix = sys.platform != "win32"

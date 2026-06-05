@@ -4,7 +4,6 @@ Be cautious that `KaosPath` is not used in this implementation.
 """
 
 import asyncio
-import heapq
 import os
 import platform
 import re
