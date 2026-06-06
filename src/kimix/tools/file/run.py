@@ -19,7 +19,7 @@ _HUGE_CMD_THRESHOLD = 10000
 """Character count above which command display is culled to only the path."""
 
 USE_SYSTEM_PWSH_ON_WINDOWS = True
-USE_SYSTEM_SHELL = False
+USE_SYSTEM_SHELL = True
 
 @functools.lru_cache(maxsize=1)
 def find_bash() -> str | None:
