@@ -1,7 +1,9 @@
 """Bash tool that executes commands via the system bash executable."""
 
 
+import functools
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -14,15 +16,57 @@ from kimi_cli.tools import SkipThisTool
 from kimi_cli.tools.display import ShellDisplayBlock
 
 from kimix.tools.common import _maybe_export_output_async, ProcessTask, _DEFAULT_FORBIDDEN_COMMANDS
-from kimix.tools.file.run import find_bash, USE_SYSTEM_SHELL, USE_SYSTEM_PWSH_ON_WINDOWS
 
 if TYPE_CHECKING:
     from kimi_agent_sdk import CallableTool2 as _CallableTool2
 
+USE_SYSTEM_SHELL = True
+USE_SYSTEM_PWSH_ON_WINDOWS = True
+
+
+@functools.lru_cache(maxsize=1)
+def find_bash() -> str | None:
+    """Find the system bash executable."""
+    if sys.platform == "darwin":
+        # Strategy 1: Homebrew bash (Apple Silicon) – often newer than system bash
+        candidate = Path("/opt/homebrew/bin/bash")
+        if candidate.exists():
+            return str(candidate.resolve())
+        # Strategy 2: Homebrew bash (Intel Macs)
+        candidate = Path("/usr/local/bin/bash")
+        if candidate.exists():
+            return str(candidate.resolve())
+        # Strategy 3: MacPorts
+        candidate = Path("/opt/local/bin/bash")
+        if candidate.exists():
+            return str(candidate.resolve())
+        # Strategy 4: Git bash fallback (official Git installer for macOS)
+        git_path = shutil.which("git")
+        if git_path:
+            git_exe = Path(git_path).resolve()
+            if git_exe.parent.name.lower() == "bin":
+                git_root = git_exe.parent
+            else:
+                git_root = git_exe.parent
+            for subpath in ("bin/bash", "usr/bin/bash"):
+                bash_candidate = git_root / subpath
+                if bash_candidate.exists():
+                    return str(bash_candidate.resolve())
+        # Strategy 5: System bash (older, but guaranteed to exist)
+        candidate = Path("/bin/bash")
+        if candidate.exists():
+            return str(candidate.resolve())
+
+    bash = shutil.which("bash")
+    if bash:
+        return bash
+    return None
+
+
 # Characters for which a backslash escape must be preserved in bash.
 # These are shell metacharacters and other special characters where
 # converting \X to /X would change shell syntax or semantics.
-_BASH_METACHARACTERS = frozenset("()|;&<>$\"`'*?[]{}~!#=% \t\n\r")
+_BASH_METACHARACTERS = frozenset("()|;&<>$\"`'"*?[]{}~!#=% \t\n\r")
 
 # In double quotes, \ only escapes these characters.  $ and ` are included
 # because \$, \` inside "..." are literal (the $ / ` is escaped, not triggering
@@ -40,7 +84,7 @@ def _find_ansi_c_end(cmd: str, start: int) -> int:
     ``start`` is the position right after the opening ``$'`` (i.e. the first
     character inside the region).  Returns ``-1`` if the region is
     unterminated.  Inside ``$'...'`` every ``\\X`` pair is treated as an
-    escape (any character after ``\\`` is skipped over).
+    escape (any character after \\ is skipped over).
     """
     i = start
     length = len(cmd)

@@ -59,84 +59,6 @@ def find_bash() -> str | None:
         return bash
     return None
 
-
-@functools.lru_cache(maxsize=1)
-def find_pwsh() -> str | None:
-    """Find the system PowerShell executable.
-
-    On Windows, prioritizes ``pwsh`` (PowerShell 7+) over ``powershell``
-    (Windows PowerShell 5.1).
-    """
-    if sys.platform != "win32":
-        return None
-
-    share_dir = get_share_dir()
-    config_dir = share_dir / "config"
-    cache_file = config_dir / "pwsh.txt"
-    # Strategy 0: read cached pwsh path
-    if cache_file.is_file():
-        cached_path = cache_file.read_text().strip()
-        if cached_path and Path(cached_path).exists():
-            return cached_path
-        # Stale cache -- remove it
-        try:
-            cache_file.unlink()
-        except Exception:
-            pass
-
-    # Strategy 1: pwsh (PowerShell 7+) via PATH
-    pwsh_path = shutil.which("pwsh")
-    if pwsh_path:
-        return str(Path(pwsh_path).resolve())
-
-    # Strategy 2: pwsh.exe via PATH
-    pwsh_path = shutil.which("pwsh.exe")
-    if pwsh_path:
-        return str(Path(pwsh_path).resolve())
-    
-    # Strategy 5: where command for pwsh
-    try:
-        import subprocess
-        r = subprocess.run(
-            ["where.exe", "pwsh.exe"],
-            capture_output=True, text=True, check=True
-        )
-        return r.stdout.strip().splitlines()[0]
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-
-    # Strategy 7: Common paths fallback for pwsh
-    candidates = [
-        r"C:\Program Files\PowerShell\7\pwsh.exe",
-        r"C:\Program Files (x86)\PowerShell\7\pwsh.exe",
-    ]
-    for candidate in candidates:
-        if Path(candidate).exists():
-            return str(Path(candidate).resolve())
-    # Strategy 8: Auto-install fallback
-    try:
-        from kimix.tools.file.bash.install_pwsh import install_pwsh
-
-        print("PowerShell 7 not found – attempting silent auto-install ...")
-        pwsh_path = install_pwsh()
-        if pwsh_path and Path(pwsh_path).exists():
-            # Persist to cache so subsequent calls skip detection + install
-            config_dir.mkdir(parents=True, exist_ok=True)
-            cache_file.write_text(pwsh_path, encoding="utf-8")
-            # Update in-process PATH so subprocesses see it immediately
-            import os as _os
-
-            bin_dir = str(Path(pwsh_path).parent)
-            current_path = _os.environ.get("PATH", "")
-            if bin_dir not in current_path.split(_os.pathsep):
-                _os.environ["PATH"] = bin_dir + _os.pathsep + current_path
-            return pwsh_path
-    except Exception:
-        pass
-
-    return None
-
-
 class RunParams(BaseModel):
     command: str = Field(
         description=(
@@ -180,8 +102,7 @@ class Run(CallableTool2[RunParams]):
         super().__init__()
         if USE_SYSTEM_SHELL:
             if sys.platform == "win32" and USE_SYSTEM_PWSH_ON_WINDOWS:
-                if find_pwsh():
-                    raise SkipThisTool()
+                raise SkipThisTool()
             else:
                 if find_bash() is not None:
                     raise SkipThisTool()

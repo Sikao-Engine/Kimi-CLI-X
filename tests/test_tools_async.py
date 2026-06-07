@@ -22,7 +22,6 @@ from kimix.tools.background.utils import (
     remove_task_id,
 )
 from kimix.tools.background import TaskOutput, TaskOutputParams
-from kimix.tools.file.run import Run, RunParams
 from kimix.tools.py import Python, Params as PyParams
 from kimix.tools.file.input import Input, InputParams
 
@@ -42,9 +41,8 @@ async def cleanup_task_data(mock_session: MagicMock) -> Any:
 
 @pytest.fixture(autouse=True)
 def patch_find_bash() -> Any:
-    with patch("kimix.tools.file.run.find_bash", return_value=None):
-        with patch("kimix.tools.file.run.find_pwsh", return_value=None):
-            yield
+    with patch("kimix.tools.file.bash.bash_tool.find_bash", return_value=None):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -124,113 +122,6 @@ class TestTaskOutput:
         assert out_path.exists()
         assert "file_content" in out_path.read_text(encoding="utf-8")
         assert "exported to file" in str(result.output)
-
-
-# ---------------------------------------------------------------------------
-# Run tool
-# ---------------------------------------------------------------------------
-class TestRun:
-    async def test_foreground_success(self, mock_session: MagicMock) -> None:
-        tool = Run(session=mock_session)
-        params = RunParams(command=f'{sys.executable} -c "print(\'hello_run\')"', timeout=10)
-        result = await tool(params)
-        assert "hello_run" in str(result.output)
-
-    async def test_foreground_failure(self, mock_session: MagicMock) -> None:
-        tool = Run(session=mock_session)
-        params = RunParams(command=f'{sys.executable} -c "import sys; sys.exit(1)"', timeout=10)
-        result = await tool(params)
-        assert "failed" in str(result.message).lower() or "exited" in str(result.output).lower()
-
-    async def test_foreground_timeout(self, mock_session: MagicMock) -> None:
-        tool = Run(session=mock_session)
-        params = RunParams(
-            command=f'{sys.executable} -c "import time; time.sleep(100)"',
-            timeout=3,
-        )
-        result = await tool(params)
-        assert "timeout" in str(result.message).lower() or "background" in str(result.message).lower()
-        # task should remain registered after timeout
-        assert len(get_all_tasks(mock_session)) >= 1
-        # cleanup
-        for tid in list(get_all_tasks(mock_session).keys()):
-            remove_task_id(mock_session, tid)
-
-    async def test_python_c_code(self, mock_session: MagicMock) -> None:
-        """Test running Python code via the `python -c` pattern with the Run tool."""
-        tool = Run(session=mock_session)
-        code = "import sys; print('py_c_hello', sys.version_info[0])"
-        params = RunParams(command=f'{sys.executable} -c "{code}"', timeout=10)
-        result = await tool(params)
-        assert "py_c_hello" in str(result.output)
-        assert "failed" not in str(result.message).lower()
-
-    async def test_output_path(self, mock_session: MagicMock, tmp_path: Path) -> None:
-        tool = Run(session=mock_session)
-        out_path = tmp_path / "run_out.txt"
-        params = RunParams(
-            command=f'{sys.executable} -c "print(\'to_file\')"',
-            timeout=10,
-            output_path=str(out_path),
-        )
-        result = await tool(params)
-        assert out_path.exists()
-        assert "to_file" in out_path.read_text(encoding="utf-8")
-        assert "saved to file" in str(result.output)
-
-    async def test_use_posix_true_calls_shlex_with_posix_true(self, mock_session: MagicMock) -> None:
-        """When use_posix=True, shlex.split should be called with posix=True."""
-        tool = Run(session=mock_session)
-        tool.use_posix = True
-        with patch("kimix.tools.file.run.shlex.split", return_value=[]) as mock_split:
-            params = RunParams(command="echo hello", timeout=10)
-            result = await tool(params)
-            assert "Empty command" in str(result.message)
-            mock_split.assert_called_once_with("echo hello", posix=True)
-
-    async def test_use_posix_false_calls_shlex_with_posix_false(self, mock_session: MagicMock) -> None:
-        """When use_posix=False, shlex.split should be called with posix=False."""
-        tool = Run(session=mock_session)
-        tool.use_posix = False
-        with patch("kimix.tools.file.run.shlex.split", return_value=[]) as mock_split:
-            params = RunParams(command="echo hello", timeout=10)
-            result = await tool(params)
-            assert "Empty command" in str(result.message)
-            mock_split.assert_called_once_with("echo hello", posix=False)
-
-    async def test_use_posix_true_preserves_literal_quotes(self, mock_session: MagicMock) -> None:
-        """When use_posix=True, literal double quotes must not be stripped."""
-        tool = Run(session=mock_session)
-        tool.use_posix = True
-        with patch("kimix.tools.file.run.shlex.split", return_value=["python", "-c", '"hello"']):
-            with patch("shutil.which", return_value="/usr/bin/python"):
-                with patch("kimix.tools.file.run.ProcessTask") as mock_pt:
-                    mock_instance = MagicMock()
-                    mock_instance.start = AsyncMock(return_value="tid")
-                    mock_pt.return_value = mock_instance
-                    params = RunParams(command='python -c \'"hello"\'', timeout=10, run_in_background=True)
-                    result = await tool(params)
-                    assert result.is_error is False
-                    assert mock_pt.call_args is not None
-                    _, args_list, _, _ = mock_pt.call_args[0]
-                    assert args_list == ["-c", '"hello"']
-
-    async def test_use_posix_false_strips_preserved_quotes(self, mock_session: MagicMock) -> None:
-        """When use_posix=False, double quotes preserved by posix=False must be stripped."""
-        tool = Run(session=mock_session)
-        tool.use_posix = False
-        with patch("kimix.tools.file.run.shlex.split", return_value=["python", "-c", '"hello"']):
-            with patch("shutil.which", return_value="C:\\Python\\python.exe"):
-                with patch("kimix.tools.file.run.ProcessTask") as mock_pt:
-                    mock_instance = MagicMock()
-                    mock_instance.start = AsyncMock(return_value="tid")
-                    mock_pt.return_value = mock_instance
-                    params = RunParams(command='python -c "hello"', timeout=10, run_in_background=True)
-                    result = await tool(params)
-                    assert result.is_error is False
-                    assert mock_pt.call_args is not None
-                    _, args_list, _, _ = mock_pt.call_args[0]
-                    assert args_list == ["-c", "hello"]
 
 
 # ---------------------------------------------------------------------------
@@ -365,20 +256,3 @@ class TestAsyncIntegration:
         await stream2.wait()
         remove_task_id(mock_session, "t1")
         remove_task_id(mock_session, "t2")
-
-
-# ---------------------------------------------------------------------------
-# RunParams scalar compatibility
-# ---------------------------------------------------------------------------
-class TestRunParams:
-    def test_env_accepts_string(self) -> None:
-        p = RunParams(command="echo hello", env="FOO=bar")
-        assert p.env == "FOO=bar"
-
-    def test_env_accepts_list(self) -> None:
-        p = RunParams(command="echo hello", env=["FOO=bar", "BAZ=qux"])
-        assert p.env == ["FOO=bar", "BAZ=qux"]
-
-    def test_env_none_default(self) -> None:
-        p = RunParams(command="echo hello")
-        assert p.env is None
