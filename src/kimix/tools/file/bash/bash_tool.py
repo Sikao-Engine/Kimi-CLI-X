@@ -66,7 +66,7 @@ def find_bash() -> str | None:
 # Characters for which a backslash escape must be preserved in bash.
 # These are shell metacharacters and other special characters where
 # converting \X to /X would change shell syntax or semantics.
-_BASH_METACHARACTERS = frozenset("()|;&<>$\"`'"*?[]{}~!#=% \t\n\r")
+_BASH_METACHARACTERS = frozenset("()|;&<>$\"`'\"*?[]{}~!#=% \t\n\r")
 
 # In double quotes, \ only escapes these characters.  $ and ` are included
 # because \$, \` inside "..." are literal (the $ / ` is escaped, not triggering
