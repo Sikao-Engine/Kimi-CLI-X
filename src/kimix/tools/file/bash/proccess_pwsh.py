@@ -424,29 +424,22 @@ def _transform_ternary_line(line: str) -> str:
             if colon_pos != -1:
                 cond_start, cond_end = _expr_left(line, pos, regions)
                 condition = line[cond_start:cond_end].strip()
-                true_start = pos + 1
-                while true_start < len(line) and line[true_start] == " ":
-                    true_start += 1
-                true_end = colon_pos
-                while true_end > true_start and line[true_end - 1] == " ":
-                    true_end -= 1
-                true_expr = line[true_start:true_end].strip()
+                true_expr = line[pos + 1:colon_pos].strip()
                 false_start, false_end = _expr_right(line, colon_pos + 1, regions)
                 false_expr = line[false_start:false_end].strip()
-                before = line[:cond_start].rstrip()
-                if not _match_assignment(before) and condition:
+                if not _match_assignment(line[:cond_start].rstrip()) and condition:
                     m = _COMMAND_PREFIX_RE.match(condition)
                     if m:
                         expr_part = condition[m.end():]
                         if expr_part and expr_part[0] in "$([\"'@0123456789":
                             cond_start += m.end()
                             condition = expr_part
-                            before = line[:cond_start].rstrip()
                 inner = f"if ({condition}) {{ {true_expr} }} else {{ {false_expr} }}"
-                line = _build_replacement(line[:cond_start], inner) + line[false_end:]
+                suffix = line[false_end:]
+                line = _build_replacement(line[:cond_start], inner) + suffix
                 regions = _find_line_regions(line)
                 depth_arr = _compute_depths(line)
-                pos = len(line) - len(line[false_end:])
+                pos = len(line) - len(suffix)
                 continue
         pos += 1
     return line
