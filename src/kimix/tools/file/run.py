@@ -261,7 +261,8 @@ class Run(CallableTool2[RunParams]):
 
                 if params.run_in_background:
                     return ToolOk(
-                        output=f"Running in background. task_id: `{task_id}`. Use `TaskOutput` tool to retrieve output.",
+                        output="",
+                        message=f"Running in background. task_id: `{task_id}`. Use `TaskOutput` tool to retrieve output.",
                         brief="Background task started",
                         display_block=ShellDisplayBlock(
                             language="shell", command=display_cmd),

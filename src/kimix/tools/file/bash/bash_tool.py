@@ -468,8 +468,8 @@ class Bash(CallableTool2[BashParams]):
         if await process_task.thread_is_alive():
             output = await process_task.stream.get_output() if process_task.stream else ""
             return ToolError(
-                output=output or f"Running in background. task_id: `{task_id}`. use `TaskOutput` or `Input`",
-                message="Process timeout",
+                output=output,
+                message=f"Running in background. task_id: `{task_id}`. use `TaskOutput` or `Input`",
                 brief="Timeout",
             )
 
