@@ -824,8 +824,7 @@ class TestKnownBugs:
         result, _ = pwsh_transform('$? ? "yes" : "no"')
         assert result == 'if ($?) { "yes" } else { "no" }'
 
-    @pytest.mark.xfail(reason="Limitation: command followed by ternary transforms entire command as condition")
-    def test_command_followed_by_ternary_without_parens(self) -> None:
+    def test_command_followed_by_ternary_without_parens(self):
         result, _ = pwsh_transform('Write-Output $a ? $b : $c')
         # Current behaviour incorrectly treats Write-Output $a as the condition
         condition = result.split("if (")[1].split(")")[0]
@@ -895,12 +894,10 @@ class TestAdditionalBugs:
         result, _ = pwsh_transform(code)
         assert "&&" not in result
 
-    @pytest.mark.xfail(reason="Limitation: && inside {} is skipped because depth > 0")
-    def test_chain_inside_script_block(self) -> None:
+    def test_chain_inside_script_block(self):
         result, _ = pwsh_transform("$sb = { cmd1 && cmd2 }")
         assert "&&" not in result
 
-    @pytest.mark.xfail(reason="Limitation: && inside $(...) is skipped because depth > 0")
-    def test_chain_inside_subexpression(self) -> None:
+    def test_chain_inside_subexpression(self):
         result, _ = pwsh_transform("$(cmd1 && cmd2)")
         assert "&&" not in result
