@@ -195,16 +195,17 @@ def _outside_regions(regions: list[tuple[int, int]], pos: int) -> bool:
 # Depth tracking
 # ---------------------------------------------------------------------------
 
-def _compute_depths(line: str) -> list[int]:
+def _compute_depths(line: str, regions: list[tuple[int, int]]) -> list[int]:
     """Return nesting depth of ``()``, ``{}``, ``[]`` before each character."""
     depths: list[int] = []
     depth = 0
-    for ch in line:
+    for i, ch in enumerate(line):
         depths.append(depth)
-        if ch in "([{":
-            depth += 1
-        elif ch in ")}]":
-            depth -= 1
+        if _outside_regions(regions, i):
+            if ch in "([{":
+                depth += 1
+            elif ch in ")}]":
+                depth -= 1
     depths.append(depth)
     return depths
 
@@ -242,6 +243,13 @@ def _join_continuation_lines(code: str) -> str:
 
 _ASSIGN_RE = re.compile(r"(.*?)(\$\w+(?::\w+)?(?:\.\w+)*)\s*=\s*$")
 _COMMAND_PREFIX_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_\-]*\s+")
+_PS_KEYWORDS = {
+    "begin", "break", "catch", "class", "continue", "data", "define", "do",
+    "dynamicparam", "else", "elseif", "end", "enum", "exit", "filter", "finally",
+    "for", "foreach", "from", "function", "hidden", "if", "in", "param",
+    "process", "return", "static", "switch", "throw", "trap", "try", "until",
+    "using", "var", "while",
+}
 
 
 def _match_assignment(before: str) -> tuple[str, str] | None:
@@ -259,6 +267,21 @@ def _build_replacement(prefix: str, inner: str) -> str:
         p, var = assign
         return f"{p}{var} = {inner}"
     return f"{prefix}{inner}"
+
+
+def _strip_command_prefix(expr: str, start: int) -> tuple[str, int]:
+    """Strip a leading command name (e.g. ``Write-Output ``) from *expr*.
+
+    Returns the stripped expression and the adjusted start index.
+    """
+    m = _COMMAND_PREFIX_RE.match(expr)
+    if m:
+        cmd = m.group(0).strip().lower()
+        if cmd not in _PS_KEYWORDS:
+            expr_part = expr[m.end():]
+            if expr_part and expr_part[0] in "$([\"'@0123456789":
+                return expr_part, start + m.end()
+    return expr, start
 
 
 # ---------------------------------------------------------------------------
@@ -287,9 +310,19 @@ def _find_expr_end(line: str, start: int, regions: list[tuple[int, int]]) -> int
     """Scan forwards from *start* to locate the end of the expression."""
     depth = 0
     for i in range(start, len(line)):
+        c = line[i]
+        if c == "#":
+            if i > 0 and line[i - 1] == "<":
+                pass
+            elif _outside_regions(regions, i):
+                return i
+            else:
+                # Check if this is the start of a line-comment region
+                idx = bisect_right(regions, (i, float("inf"))) - 1
+                if idx >= 0 and regions[idx][0] == i:
+                    return i
         if not _outside_regions(regions, i):
             continue
-        c = line[i]
         if c in "([{":
             depth += 1
         elif c in ")}]":
@@ -297,10 +330,6 @@ def _find_expr_end(line: str, start: int, regions: list[tuple[int, int]]) -> int
             if depth < 0:
                 return i
         elif depth == 0 and c in ";|&,":
-            return i
-        elif c == "#":
-            if i > 0 and line[i - 1] == "<":
-                continue
             return i
     return len(line)
 
@@ -378,6 +407,7 @@ def _transform_nc_line(line: str) -> str:
                 left_start, left_end = _expr_left(line, idx, regions)
                 right_start, right_end = _expr_right(line, idx + 2, regions)
                 left_expr = line[left_start:left_end].strip()
+                left_expr, left_start = _strip_command_prefix(left_expr, left_start)
                 right_expr = line[right_start:right_end].strip()
                 if left_expr and right_expr:
                     inner = f"if ($null -ne {left_expr}) {{ {left_expr} }} else {{ {right_expr} }}"
@@ -411,13 +441,12 @@ def _find_matching_colon(
 def _transform_ternary_line(line: str) -> str:
     """Rewrite ternary ``$cond ? $true : $false`` into an ``if`` statement."""
     regions = _find_line_regions(line)
-    depth_arr = _compute_depths(line)
+    depth_arr = _compute_depths(line, regions)
     pos = 0
     while pos < len(line):
         if (
             line[pos] == "?"
             and _outside_regions(regions, pos)
-            and depth_arr[pos] == 0
             and not (pos > 0 and line[pos - 1] == "$")
         ):
             colon_pos = _find_matching_colon(line, pos + 1, regions, depth_arr)
@@ -438,7 +467,7 @@ def _transform_ternary_line(line: str) -> str:
                 suffix = line[false_end:]
                 line = _build_replacement(line[:cond_start], inner) + suffix
                 regions = _find_line_regions(line)
-                depth_arr = _compute_depths(line)
+                depth_arr = _compute_depths(line, regions)
                 pos = len(line) - len(suffix)
                 continue
         pos += 1
@@ -480,18 +509,19 @@ def _transform_null_conditional_dot_line(line: str) -> str:
     """Rewrite null-conditional member access ``$obj?.Member``."""
     while True:
         regions = _find_line_regions(line)
-        depth_arr = _compute_depths(line)
+        depth_arr = _compute_depths(line, regions)
         matched = False
         pos = 0
         while pos < len(line) - 1:
             idx = line.find("?.", pos)
             if idx == -1:
                 break
-            if depth_arr[idx] != 0 or not _outside_regions(regions, idx):
+            if not _outside_regions(regions, idx):
                 pos = idx + 2
                 continue
             expr_start, expr_end = _expr_left(line, idx, regions)
             base = line[expr_start:expr_end].strip()
+            base, expr_start = _strip_command_prefix(base, expr_start)
             if not base:
                 pos = idx + 2
                 continue
@@ -534,6 +564,7 @@ def _transform_null_conditional_dot_line(line: str) -> str:
             inner = paths[-1]
             for p in reversed(paths[:-1]):
                 inner = f"if ($null -ne {p}) {{ {inner} }}"
+            inner = f"$({inner})"
             line = _build_replacement(line[:expr_start], inner) + line[chain[-1][2]:]
             matched = True
             break
@@ -550,18 +581,19 @@ def _transform_null_conditional_bracket_line(line: str) -> str:
     """Rewrite null-conditional index access ``$obj?[index]``."""
     while True:
         regions = _find_line_regions(line)
-        depth_arr = _compute_depths(line)
+        depth_arr = _compute_depths(line, regions)
         matched = False
         pos = 0
         while pos < len(line) - 1:
             idx = line.find("?[", pos)
             if idx == -1:
                 break
-            if depth_arr[idx] != 0 or not _outside_regions(regions, idx):
+            if not _outside_regions(regions, idx):
                 pos = idx + 2
                 continue
             expr_start, expr_end = _expr_left(line, idx, regions)
             expr = line[expr_start:expr_end].strip()
+            expr, expr_start = _strip_command_prefix(expr, expr_start)
             if not expr:
                 pos = idx + 2
                 continue
@@ -576,7 +608,7 @@ def _transform_null_conditional_bracket_line(line: str) -> str:
                         bracket_depth -= 1
                 bracket_end += 1
             index_expr = line[idx + 2 : bracket_end - 1]
-            inner = f"if ($null -ne {expr}) {{ {expr}[{index_expr}] }}"
+            inner = f"$(if ($null -ne {expr}) {{ {expr}[{index_expr}] }})"
             line = _build_replacement(line[:expr_start], inner) + line[bracket_end:]
             matched = True
             break
@@ -627,11 +659,11 @@ def pwsh_transform(code: str, *, warn_chain: bool = False) -> tuple[str, str]:
             result.append(line)
             continue
         line = _transform_nca_line(line)
+        line = _transform_null_conditional_dot_line(line)
+        line = _transform_null_conditional_bracket_line(line)
         line = _transform_nc_line(line)
         line = _transform_ternary_line(line)
         line = _transform_chain_line(line)
-        line = _transform_null_conditional_dot_line(line)
-        line = _transform_null_conditional_bracket_line(line)
         result.append(line)
 
     result_code = "\n".join(result)
