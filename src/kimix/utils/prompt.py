@@ -290,11 +290,20 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
             return
 
         plan_content = plan_file.read_text(encoding="utf-8", errors="replace")
-        regular_session = await _create_session_async(agent_type=SystemPromptType.Worker)
+        regular_session = _create_default_session()
         await prompt_async(
             f"Please implement the following plan:\n\n{plan_content}",
             session=regular_session,
-            close_session_after_prompt=True,
+        )
+
+        review_reminder = (
+            "Please review the last plan that was just implemented and ensure all tasks are finished. "
+            "Verify every item in the plan has been completed successfully, and address any remaining issues.\n\n"
+            f"Plan:\n{plan_content}"
+        )
+        await prompt_async(
+            review_reminder,
+            session=regular_session,
         )
     except Exception as exc:
         base._stream.colorful_print_word(

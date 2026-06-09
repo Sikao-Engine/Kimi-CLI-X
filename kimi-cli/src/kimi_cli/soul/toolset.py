@@ -135,6 +135,44 @@ def _make_reminder_text_2(tool_name: str, repeat_count: int, canonical_args: str
     )
 
 
+# Different-args tool call repetition thresholds
+_DIFF_ARGS_WARN_THRESHOLDS: tuple[int, ...] = (15, 25, 35)
+
+_DIFF_ARGS_REMINDER_TEXT_1 = (
+    "\n\n<system-reminder>\n"
+    "Same tool called repeatedly with different args. Reconsider your approach."
+    "\n</system-reminder>"
+)
+
+
+def _make_diff_args_reminder_text_2(tool_name: str, call_count: int) -> str:
+    return (
+        "\n\n<system-reminder>\n"
+        f"'{tool_name}' called {call_count} times with different args. "
+        "Stop if stuck — try a different approach or finish now."
+        "\n</system-reminder>"
+    )
+
+
+def _make_diff_args_reminder_text_3(tool_name: str, call_count: int) -> str:
+    return (
+        "\n\n<system-reminder>\n"
+        f"'{tool_name}' called {call_count} times. Stop now. "
+        "Change approach or finish the task."
+        "\n</system-reminder>"
+    )
+
+
+def _make_diff_args_reminder(tool_name: str, call_count: int) -> str:
+    """Return progressively stronger warnings based on the call count."""
+    if call_count <= _DIFF_ARGS_WARN_THRESHOLDS[0]:
+        return _DIFF_ARGS_REMINDER_TEXT_1
+    elif call_count <= _DIFF_ARGS_WARN_THRESHOLDS[1]:
+        return _make_diff_args_reminder_text_2(tool_name, call_count)
+    else:
+        return _make_diff_args_reminder_text_3(tool_name, call_count)
+
+
 def _sort_json_value(value: object) -> object:
     if isinstance(value, list):
         return [_sort_json_value(item) for item in cast("list[object]", value)]
@@ -208,6 +246,11 @@ class KimiToolset:
         self._step_no: int = 0
         self._turn_id: str = ""
 
+        # "Different-args" per-tool call tracking (relaxed limitation)
+        self._tool_call_counts: dict[str, int] = {}   # tool_name → total calls this turn
+        self._tool_warned_at: dict[str, set[int]] = {}  # tool_name → {count thresholds already warned}
+        self._turn_tool_warning_issued: bool = False    # flag to avoid flooding multiple tools in same step
+
     def set_hook_engine(self, engine: HookEngine) -> None:
         self._hook_engine = engine
 
@@ -260,6 +303,13 @@ class KimiToolset:
         self._step_closed = False
         self._dedup_triggered = False
         self._step_no = step_no
+
+        # Detect new turn and reset per-tool different-args tracking
+        if turn_id and turn_id != self._turn_id:
+            self._tool_call_counts.clear()
+            self._tool_warned_at.clear()
+        self._turn_tool_warning_issued = False  # Reset per-step
+
         self._turn_id = turn_id
         if not self._previous_step_calls:
             self._seen_call_keys = set()
@@ -331,6 +381,10 @@ class KimiToolset:
             call_index = len(self._current_step_calls)
             self._current_step_calls.append(call_key)
 
+            # Per-tool different-args call counting (relaxed limitation)
+            self._tool_call_counts[tool_name] = self._tool_call_counts.get(tool_name, 0) + 1
+            call_count = self._tool_call_counts[tool_name]
+
             # Same-step dedup: wait for the original task and copy its result.
             if call_key in self._current_step_tasks:
                 original_task = self._current_step_tasks[call_key]
@@ -353,6 +407,21 @@ class KimiToolset:
                     reminder_text = _REMINDER_TEXT_1
                 elif repeat_count in (5, 8):
                     reminder_text = _make_reminder_text_2(tool_name, repeat_count, canonical_args)
+
+            # Different-args per-tool overuse check (relaxed limitation)
+            diff_args_reminder_text: str | None = None
+            if not is_cross_step_dup and call_count in _DIFF_ARGS_WARN_THRESHOLDS:
+                warned_at = self._tool_warned_at.setdefault(tool_name, set())
+                if call_count not in warned_at and not self._turn_tool_warning_issued:
+                    warned_at.add(call_count)
+                    self._turn_tool_warning_issued = True
+                    diff_args_reminder_text = _make_diff_args_reminder(tool_name, call_count)
+
+            # Merge reminder texts if both are set
+            if reminder_text is not None and diff_args_reminder_text is not None:
+                reminder_text = reminder_text + diff_args_reminder_text
+            elif diff_args_reminder_text is not None:
+                reminder_text = diff_args_reminder_text
 
             tool = self._tool_dict[tool_name]
 

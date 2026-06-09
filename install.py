@@ -73,6 +73,25 @@ def main() -> int:
         )
         return 1
 
+    # 5. Install coreutils (Windows only)
+    if sys.platform == "win32":
+        coreutils_script = Path(__file__).parent / "scripts" / "install_coreutils.py"
+        if coreutils_script.exists():
+            try:
+                scripts_dir = str(coreutils_script.parent)
+                if scripts_dir not in sys.path:
+                    sys.path.insert(0, scripts_dir)
+                import install_coreutils
+
+                print("\n▶ Installing coreutils ...")
+                result = install_coreutils.install_coreutils()
+                if result:
+                    print(f"✅ Coreutils installed at {result}.")
+                else:
+                    print("⚠️  Coreutils installation was not successful (non-fatal).")
+            except Exception as e:
+                print(f"⚠️  Could not install coreutils: {e}")
+
     print("\n🎉 All done! The project has been installed successfully.")
     return 0
 

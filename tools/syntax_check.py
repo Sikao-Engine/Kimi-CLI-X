@@ -1,4 +1,4 @@
-"""Test to run Python syntax check on a target file and optionally execute it if checks pass."""
+"""Test to run Python syntax check on target files and optionally execute them if checks pass."""
 
 import argparse
 import logging
@@ -54,40 +54,44 @@ def _run_python(target_file: Path) -> tuple[int, str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run Python syntax check on a target file. Use --exec to also execute it if checks pass."
+        description="Run Python syntax check on target files. Use --exec to also execute them if checks pass."
     )
-    parser.add_argument("target_file", help="Python file to check")
+    parser.add_argument("target_files", nargs="+", help="Python files to check")
     parser.add_argument(
         "--exec", "-e",
         action="store_true",
-        help="Execute the file after successful syntax check",
+        help="Execute the files after successful syntax check",
     )
     args = parser.parse_args()
 
-    target_file = _resolve_target(args.target_file)
+    overall_rc = 0
+    for target_str in args.target_files:
+        target_file = _resolve_target(target_str)
 
-    returncode, stdout, stderr = _run_py_compile(target_file)
-    if stdout:
-        print(stdout)
-    if stderr:
-        print(stderr)
+        returncode, stdout, stderr = _run_py_compile(target_file)
+        if stdout:
+            print(stdout)
+        if stderr:
+            print(stderr)
 
-    if returncode != 0:
-        logger.error("Syntax check failed; aborting execution.")
-        return returncode
+        if returncode != 0:
+            logger.error("Syntax check failed for %s; aborting execution.", target_file)
+            overall_rc = returncode
+            continue
 
-    print(f"[syntax_check] Syntax OK: {target_file}")
+        print(f"[syntax_check] Syntax OK: {target_file}")
 
-    if args.exec:
-        print(f"[syntax_check] Executing {target_file} ...")
-        exec_rc, exec_out, exec_err = _run_python(target_file)
-        if exec_out:
-            print(exec_out)
-        if exec_err:
-            print(exec_err, file=sys.stderr)
-        return exec_rc
+        if args.exec:
+            print(f"[syntax_check] Executing {target_file} ...")
+            exec_rc, exec_out, exec_err = _run_python(target_file)
+            if exec_out:
+                print(exec_out)
+            if exec_err:
+                print(exec_err, file=sys.stderr)
+            if exec_rc != 0:
+                overall_rc = exec_rc
 
-    return returncode
+    return overall_rc
 
 
 if __name__ == '__main__':
