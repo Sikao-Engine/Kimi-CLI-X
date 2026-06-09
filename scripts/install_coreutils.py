@@ -3,8 +3,6 @@
 Strategy (in priority order):
 1. WinGet (official Microsoft recommendation)
 2. Direct download from GitHub latest release
-3. Chocolatey (if already available)
-4. Scoop (if already available)
 
 Usage:
     python install_coreutils.py                          # default install
@@ -20,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+import urllib.parse
 import winreg
 from pathlib import Path
 
@@ -27,6 +26,7 @@ from pathlib import Path
 # Global configuration
 # ============================================================
 _GITHUB_API_URL = "https://api.github.com/repos/microsoft/coreutils/releases/latest"
+_GITHUB_RELEASES_URL = "https://github.com/microsoft/coreutils/releases/latest"
 
 
 def _get_share_dir() -> Path:
@@ -56,17 +56,72 @@ def _run(cmd: list[str], timeout: int = 300) -> subprocess.CompletedProcess[str]
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
 
+def _get_github_token() -> str | None:
+    """Return a GitHub token from the environment, or ``None``.
+
+    Checks ``GITHUB_TOKEN`` then ``GH_TOKEN``.
+    """
+    return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+
+
 def _download_file(url: str, dest: Path) -> None:
     """Download *url* to *dest*, with a progress indicator."""
 
-    def _report(block_num: int, block_size: int, total_size: int) -> None:
-        if total_size > 0:
-            pct = min(100, int(block_num * block_size * 100 / total_size))
-            sys.stdout.write(f"\r  {pct}%")
-            sys.stdout.flush()
+    # If the URL is a GitHub release download, try to add token auth
+    req = urllib.request.Request(url)
+    token = _get_github_token()
+    if token and "github.com" in url:
+        req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("User-Agent", "kimix-installer")
 
-    urllib.request.urlretrieve(url, str(dest), _report)
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        with open(str(dest), "wb") as f:
+            total_size = int(resp.headers.get("Content-Length", 0))
+            downloaded = 0
+            while True:
+                chunk = resp.read(8192)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+                if total_size > 0:
+                    pct = min(100, int(downloaded * 100 / total_size))
+                    sys.stdout.write(f"\r  {pct}%")
+                    sys.stdout.flush()
     print()  # newline after progress
+
+
+def _refresh_path_from_registry() -> None:
+    """Refresh ``os.environ["PATH"]`` from the Windows registry.
+
+    Reads both the system (HKLM) and user (HKCU) PATH values and
+    merges them into the current process environment so that
+    ``shutil.which`` can find binaries installed by external
+    package managers (e.g. WinGet) without restarting the process.
+    """
+    paths: list[str] = []
+    for hive, subkey in (
+        (winreg.HKEY_CURRENT_USER, r"Environment"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+    ):
+        try:
+            with winreg.OpenKey(hive, subkey, 0, winreg.KEY_READ) as key:
+                val, _ = winreg.QueryValueEx(key, "Path")
+                if isinstance(val, str):
+                    paths.append(val)
+        except (FileNotFoundError, OSError):
+            pass
+
+    existing = os.environ.get("PATH", "")
+    merged: list[str] = []
+    seen: set[str] = set()
+    for part in existing.split(";") + [p for src in paths for p in src.split(";")]:
+        part = part.strip()
+        if part and part.lower() not in seen:
+            seen.add(part.lower())
+            merged.append(part)
+    if merged:
+        os.environ["PATH"] = ";".join(merged)
 
 
 def _ensure_in_user_path(dirpath: str) -> None:
@@ -129,12 +184,26 @@ def _try_winget() -> bool:
                 "Microsoft.Coreutils",
                 "--silent",
                 "--accept-package-agreements",
-                "--accept-source-agreements",
-                "--scope",
-                "user",
+                "--accept-source-agreements"
             ],
-            timeout=300,
+            timeout=3000,
         )
+        # WinGet updates the *registry* PATH; refresh the current process
+        # environment so that shutil.which can see the new location.
+        _refresh_path_from_registry()
+        # In case the registry is not yet updated, probe known default
+        # installation directories directly and temporarily inject them
+        # into os.environ["PATH"] so the rest of the script can locate
+        # the binaries.
+        for candidate in (
+            r"C:\Program Files\coreutils\bin",
+            r"C:\Program Files (x86)\coreutils\bin",
+        ):
+            if (Path(candidate) / "cat.exe").exists():
+                current_path = os.environ.get("PATH", "")
+                if candidate.lower() not in current_path.lower():
+                    os.environ["PATH"] = candidate + ";" + current_path
+                return True
         # WinGet returns 0 on success but may also return non-zero when
         # the package is already installed; verify by looking for cat.exe.
         return _coreutils_found()
@@ -143,45 +212,119 @@ def _try_winget() -> bool:
         return False
 
 
+def _get_latest_tag_via_redirect() -> str | None:
+    """Get the latest release tag by following the ``/releases/latest`` redirect.
+
+    This is a fallback when the GitHub API is rate-limited.
+    """
+    try:
+        req = urllib.request.Request(
+            _GITHUB_RELEASES_URL,
+            headers={"User-Agent": "kimix-installer"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            final_url = resp.url
+        # e.g. https://github.com/microsoft/coreutils/releases/tag/v2026.5.29
+        tag = final_url.rstrip("/").rsplit("/", 1)[-1]
+        if tag.startswith("v"):
+            return tag
+        print(f"Unexpected redirect URL format: {final_url}")
+        return None
+    except Exception as exc:
+        print(f"Failed to resolve latest release redirect: {exc}")
+        return None
+
+
+def _construct_download_url_from_tag(tag: str) -> str | None:
+    """Construct a download URL from a release tag, trying known asset name patterns.
+
+    Returns the first valid download URL found, or ``None``.
+    """
+    version = tag.lstrip("v")
+    base = f"https://github.com/microsoft/coreutils/releases/download/{tag}"
+    # Try x64 first, then arm64, then any .exe
+    archs = ["-x64.exe", "-arm64.exe", ".exe"]
+    for arch in archs:
+        for name in [
+            f"coreutils-{version}{arch}",
+            f"Coreutils-{version}{arch}",
+        ]:
+            url = f"{base}/{name}"
+            try:
+                req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "kimix-installer"})
+                token = _get_github_token()
+                if token:
+                    req.add_header("Authorization", f"Bearer {token}")
+                with urllib.request.urlopen(req, timeout=10):
+                    return url
+            except Exception:
+                continue
+    return None
+
+
 def _try_github_download(
     install_dir: str | None = None,
 ) -> bool:
     """Download the latest Coreutils installer from GitHub and run it silently.
 
+    Strategy:
+    1. Query the GitHub API (authenticated with token if available).
+    2. Fallback: resolve ``/releases/latest`` redirect and construct the
+       download URL using known asset name patterns.
+
     This is a best-effort fallback: we try common silent-install flags
     used by NSIS, Inno Setup, and WiX.  If none succeed we give up.
     """
+    download_url: str | None = None
+    installer_name: str | None = None
+
+    # --- Strategy 1: GitHub API ---
     try:
         print("Querying GitHub API for latest Coreutils release ...")
-        req = urllib.request.Request(
-            _GITHUB_API_URL,
-            headers={"Accept": "application/vnd.github+json", "User-Agent": "kimix-installer"},
-        )
+        headers: dict[str, str] = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "kimix-installer",
+        }
+        token = _get_github_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(_GITHUB_API_URL, headers=headers)
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except Exception as exc:
-        print(f"GitHub API query failed: {exc}")
-        return False
 
-    assets = data.get("assets", [])
-    # Prefer x64 over arm64
-    asset = next(
-        (a for a in assets if a.get("name", "").endswith("-x64.exe")),
-        None,
-    )
-    if asset is None:
+        assets = data.get("assets", [])
+        # Prefer x64 over arm64
         asset = next(
-            (a for a in assets if a.get("name", "").endswith(".exe")),
+            (a for a in assets if a.get("name", "").endswith("-x64.exe")),
             None,
         )
-    if asset is None:
-        print("No .exe asset found in latest release.")
+        if asset is None:
+            asset = next(
+                (a for a in assets if a.get("name", "").endswith(".exe")),
+                None,
+            )
+        if asset is not None:
+            download_url = asset["browser_download_url"]
+            installer_name = asset["name"]
+    except Exception as exc:
+        print(f"GitHub API query failed: {exc}")
+
+    # --- Strategy 2: Fallback via redirect + pattern ---
+    if download_url is None:
+        print("Falling back to release redirect pattern ...")
+        tag = _get_latest_tag_via_redirect()
+        if tag:
+            url = _construct_download_url_from_tag(tag)
+            if url:
+                download_url = url
+                # Derive a reasonable filename from the URL
+                installer_name = download_url.rstrip("/").rsplit("/", 1)[-1]
+
+    if download_url is None or installer_name is None:
+        print("Could not determine download URL for latest Coreutils release.")
         return False
 
-    download_url = asset["browser_download_url"]
-    installer_name = asset["name"]
     installer = Path(tempfile.gettempdir()) / installer_name
-
     # --- download ---
     try:
         print(f"Downloading {installer_name} ...")
@@ -192,59 +335,21 @@ def _try_github_download(
 
     # --- install ---
     # Try a handful of common silent-install flag sets.
-    silent_flag_sets: list[list[str]] = [
-        ["/VERYSILENT", "/NORESTART"],          # Inno Setup
-        ["/SILENT", "/NORESTART"],              # Inno Setup (less silent)
-        ["/S"],                                  # NSIS
-        ["/quiet", "/norestart"],               # WiX / MSI
-        ["--silent"],                            # Generic
-    ]
-
+    
     ok = False
-    for flags in silent_flag_sets:
-        try:
-            print(f"Running installer with flags {flags} ...")
-            _run([str(installer), *flags], timeout=300)
-        except subprocess.TimeoutExpired:
-            print("Installer timed out.")
-            continue
-        except Exception as exc:
-            print(f"Installer error: {exc}")
-            continue
-
+    try:
+        print(f"Running installer ...")
+        _run([str(installer)], timeout=3000)
         if _coreutils_found():
             ok = True
-            break
+    except subprocess.TimeoutExpired:
+        print("Installer timed out.")
+    except Exception as exc:
+        print(f"Installer error: {exc}")
 
     # --- clean up ---
     installer.unlink(missing_ok=True)
     return ok
-
-
-def _try_choco() -> bool:
-    """Install Coreutils via Chocolatey (if already on the machine)."""
-    if not shutil.which("choco"):
-        return False
-    try:
-        print("Installing Coreutils via Chocolatey ...")
-        result = _run(["choco", "install", "microsoft-coreutils", "-y"], timeout=300)
-        return result.returncode == 0 or _coreutils_found()
-    except Exception as exc:
-        print(f"Chocolatey install failed: {exc}")
-        return False
-
-
-def _try_scoop() -> bool:
-    """Install Coreutils via Scoop (if already on the machine)."""
-    if not shutil.which("scoop"):
-        return False
-    try:
-        print("Installing Coreutils via Scoop ...")
-        result = _run(["scoop", "install", "coreutils"], timeout=300)
-        return result.returncode == 0 or _coreutils_found()
-    except Exception as exc:
-        print(f"Scoop install failed: {exc}")
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -262,8 +367,6 @@ def install_coreutils(
     Tries, in order:
       1. WinGet (``winget install Microsoft.Coreutils --silent``).
       2. Direct download from GitHub latest release (portable installer).
-      3. Chocolatey (``choco install microsoft-coreutils``).
-      4. Scoop (``scoop install coreutils``).
 
     Parameters
     ----------
@@ -296,8 +399,6 @@ def install_coreutils(
     strategies: list[tuple[str, object]] = [
         ("winget", _try_winget),
         ("github direct download", lambda: _try_github_download(install_dir)),
-        ("chocolatey", _try_choco),
-        ("scoop", _try_scoop),
     ]
 
     for name, fn in strategies:
@@ -334,7 +435,15 @@ if __name__ == "__main__":
         default=None,
         help="Custom install directory",
     )
+    parser.add_argument(
+        "--github",
+        action="store_true",
+        help="Use GitHub direct download strategy only",
+    )
     args = parser.parse_args()
 
-    success = install_coreutils(install_dir=args.install_dir)
+    if args.github:
+        success = _try_github_download(install_dir=args.install_dir)
+    else:
+        success = install_coreutils(install_dir=args.install_dir)
     sys.exit(0 if success else 1)
