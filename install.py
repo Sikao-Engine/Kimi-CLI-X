@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Install script for the project using uv."""
 
-import os
 import shutil
 import subprocess
 import sys
@@ -45,52 +44,6 @@ def run_command(cmd: list[str], description: str) -> bool:
         print(f"\n❌ Error running command: {' '.join(cmd)}")
         print(f"   Details: {e}")
         return False
-
-
-def _install_ripgrep() -> tuple[bool, bool]:
-    """Prompt for and install ripgrep if needed.
-
-    Returns (was_installed, should_restart_shell).
-    """
-    rg_cmd = "rg.exe" if sys.platform == "win32" else "rg"
-    if command_exists(rg_cmd) or command_exists("rg"):
-        print("✅ ripgrep is already installed, skipping.")
-        return False, False
-
-    # Also check the KIMI share bin directory where it may have been installed
-    share_dir_env = os.environ.get("KIMI_SHARE_DIR")
-    share_dir = Path(share_dir_env) if share_dir_env else Path.home() / ".kimi"
-    share_rg = share_dir / "bin" / rg_cmd
-    if share_rg.is_file():
-        print(f"✅ ripgrep is already installed at {share_rg}, skipping.")
-        return False, False
-
-    if not _ask_yes_no("ripgrep (rg) was not found. Install ripgrep?"):
-        print("⏭️  Skipping ripgrep installation.")
-        return False, False
-
-    rg_script = Path(__file__).parent / "scripts" / "install_ripgrep.py"
-    if not rg_script.exists():
-        print(f"⚠️  install_ripgrep.py not found at {rg_script}, skipping.")
-        return False, False
-
-    try:
-        scripts_dir = str(rg_script.parent)
-        if scripts_dir not in sys.path:
-            sys.path.insert(0, scripts_dir)
-        import install_ripgrep
-
-        print("\n▶ Installing ripgrep ...")
-        result = install_ripgrep.install_ripgrep()
-        if result:
-            print(f"✅ ripgrep installed at {result}.")
-            return True, True
-        else:
-            print("⚠️  ripgrep installation was not successful (non-fatal).")
-            return False, False
-    except Exception as e:
-        print(f"⚠️  Could not install ripgrep: {e}")
-        return False, False
 
 
 def _install_coreutils() -> tuple[bool, bool]:
@@ -193,12 +146,11 @@ def main() -> int:
         )
 
     # 2. Optional binary installations (before uv sync so they are available)
-    ripgrep_installed, rg_restart = _install_ripgrep()
     coreutils_installed, cu_restart = _install_coreutils()
     git_installed, git_restart = _install_git()
 
-    any_binary_installed = ripgrep_installed or coreutils_installed or git_installed
-    needs_restart = rg_restart or cu_restart or git_restart
+    any_binary_installed = coreutils_installed or git_installed
+    needs_restart = cu_restart or git_restart
 
     if any_binary_installed and needs_restart:
         print(

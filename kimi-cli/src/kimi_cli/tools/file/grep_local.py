@@ -4,28 +4,20 @@ Be cautious that `KaosPath` is not used in this implementation.
 """
 
 import asyncio
+import fnmatch
+import heapq
 import os
 import platform
 import re
 import shlex
 import shutil
-import stat
-import tarfile
-import tempfile
-import zipfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, override
 
 from kaos.path import KaosPath
 
-import asyncio
-import fnmatch
-import heapq
-import os
-import re
-
-import aiohttp
+from ripgrepy import Ripgrepy, RipGrepOut as _RipGrepOut
 from kosong.tooling import (
     CallableTool2,
     ToolError,
@@ -36,10 +28,8 @@ from kosong.tooling import (
 )
 from pydantic import BaseModel, Field, field_validator
 
-import kimi_cli
 from kimi_cli.share import get_share_dir
 from kimi_cli.tools.utils import ToolResultBuilder, load_desc
-from kimi_cli.utils.aiohttp import new_client_session
 from kimi_cli.utils.logging import logger
 from kimi_cli.utils.path import is_within_workspace, normalize_user_path
 from kimi_cli.utils.sensitive import is_sensitive_file, sensitive_file_warning
@@ -157,165 +147,25 @@ class Params(BaseModel):
         default=False,
     )
 
-# Github
-RG_VERSION = "15.1.0"
-RG_BASE_URL = f"https://github.com/BurntSushi/ripgrep/releases/download/{RG_VERSION}"
-# Kimi website (for Chinese users)
-BACKUP_RG_VERSION = "15.0.0"
-BACKUP_RG_BASE_URL = "http://cdn.kimi.com/binaries/kimi-cli/rg"
-
 RG_TIMEOUT = 60  # seconds
-RG_MAX_BUFFER = 20_000_000  # 20MB stdout/stderr buffer limit
-RG_KILL_GRACE = 5  # seconds: SIGTERM → SIGKILL
+RG_MAX_BUFFER = 20_000_000  # 20MB stdout/stderr buffer limit (unused with ripgrepy)
+RG_KILL_GRACE = 5  # seconds: SIGTERM → SIGKILL (unused with ripgrepy)
 MAX_BYTES = 100 << 10  # 100KB
-_RG_DOWNLOAD_LOCK = asyncio.Lock()
 
 
-def _rg_binary_name() -> str:
-    return "rg.exe" if platform.system() == "Windows" else "rg"
-
-
-@lru_cache(maxsize=1)
-def _find_existing_rg(bin_name: str) -> Path | None:
+def _find_rg_path() -> str | None:
+    """Find rg binary: first check share dir, then PATH."""
+    # Check kimi share directory (where rg was previously downloaded)
+    bin_name = "rg.exe" if platform.system() == "Windows" else "rg"
     share_bin = get_share_dir() / "bin" / bin_name
     if share_bin.is_file():
-        return share_bin
+        return str(share_bin)
 
-    assert kimi_cli.__file__ is not None
-    local_dep = Path(kimi_cli.__file__).parent / "deps" / "bin" / bin_name
-    if local_dep.is_file():
-        return local_dep
-
+    # Check PATH
     system_rg = shutil.which("rg")
     if system_rg:
-        return Path(system_rg)
-
+        return str(system_rg)
     return None
-
-
-def _detect_target() -> str | None:
-    sys_name = platform.system()
-    mach = platform.machine().lower()
-
-    if mach in ("x86_64", "amd64"):
-        arch = "x86_64"
-    elif mach in ("arm64", "aarch64"):
-        arch = "aarch64"
-    else:
-        logger.error("Unsupported architecture for ripgrep: {mach}", mach=mach)
-        return None
-
-    if sys_name == "Darwin":
-        os_name = "apple-darwin"
-    elif sys_name == "Linux":
-        os_name = "unknown-linux-musl" if arch == "x86_64" else "unknown-linux-gnu"
-    elif sys_name == "Windows":
-        os_name = "pc-windows-msvc"
-    else:
-        logger.error("Unsupported operating system for ripgrep: {sys_name}", sys_name=sys_name)
-        return None
-
-    return f"{arch}-{os_name}"
-
-
-async def _download_and_install_rg(bin_name: str) -> Path:
-    target = _detect_target()
-    if not target:
-        raise RuntimeError("Unsupported platform for ripgrep download")
-
-    is_windows = "windows" in target
-    archive_ext = "zip" if is_windows else "tar.gz"
-
-    primary_filename = f"ripgrep-{RG_VERSION}-{target}.{archive_ext}"
-    primary_url = f"{RG_BASE_URL}/{primary_filename}"
-
-    backup_filename = f"ripgrep-{BACKUP_RG_VERSION}-{target}.{archive_ext}"
-    backup_url = f"{BACKUP_RG_BASE_URL}/{backup_filename}"
-
-    share_bin_dir = get_share_dir() / "bin"
-    share_bin_dir.mkdir(parents=True, exist_ok=True)
-    destination = share_bin_dir / bin_name
-
-    # Downloading the ripgrep binary can be slow on constrained networks.
-    download_timeout = aiohttp.ClientTimeout(total=600, sock_read=60, sock_connect=15)
-    async with new_client_session(timeout=download_timeout) as session:
-        with tempfile.TemporaryDirectory(prefix="kimi-rg-") as tmpdir:
-            tar_path = Path(tmpdir) / primary_filename
-
-            # Try primary URL first
-            url = primary_url
-            logger.info("Downloading ripgrep from {url}", url=url)
-            try:
-                async with session.get(url) as resp:
-                    resp.raise_for_status()
-                    with open(tar_path, "wb") as fh:
-                        async for chunk in resp.content.iter_chunked(1024 * 64):
-                            if chunk:
-                                fh.write(chunk)
-            except (aiohttp.ClientError, TimeoutError) as exc:
-                logger.warning(
-                    "Failed to download ripgrep from primary URL ({url}), trying backup...",
-                    url=url,
-                )
-                # Try backup URL
-                url = backup_url
-                tar_path = Path(tmpdir) / backup_filename
-                logger.info("Downloading ripgrep from {url}", url=url)
-                try:
-                    async with session.get(url) as resp:
-                        resp.raise_for_status()
-                        with open(tar_path, "wb") as fh:
-                            async for chunk in resp.content.iter_chunked(1024 * 64):
-                                if chunk:
-                                    fh.write(chunk)
-                except (aiohttp.ClientError, TimeoutError) as exc2:
-                    raise RuntimeError(f"Failed to download ripgrep binary, try download it manually from {RG_BASE_URL} and saved to {destination}") from exc2
-
-            try:
-                if is_windows:
-                    with zipfile.ZipFile(tar_path, "r") as zf:
-                        member_name = next(
-                            (name for name in zf.namelist() if Path(name).name == bin_name),
-                            None,
-                        )
-                        if not member_name:
-                            raise RuntimeError("Ripgrep binary not found in archive")
-                        with zf.open(member_name) as source, open(destination, "wb") as dest_fh:
-                            shutil.copyfileobj(source, dest_fh)
-                else:
-                    with tarfile.open(tar_path, "r:gz") as tar:
-                        member = next(
-                            (m for m in tar.getmembers() if Path(m.name).name == bin_name),
-                            None,
-                        )
-                        if not member:
-                            raise RuntimeError("Ripgrep binary not found in archive")
-                        extracted = tar.extractfile(member)
-                        if not extracted:
-                            raise RuntimeError("Failed to extract ripgrep binary")
-                        with open(destination, "wb") as dest_fh:
-                            shutil.copyfileobj(extracted, dest_fh)
-            except (zipfile.BadZipFile, tarfile.TarError, OSError) as exc:
-                raise RuntimeError("Failed to extract ripgrep archive") from exc
-
-    destination.chmod(destination.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    logger.info("Installed ripgrep to {destination}", destination=destination)
-    return destination
-
-
-async def _ensure_rg_path() -> str:
-    bin_name = _rg_binary_name()
-    existing = _find_existing_rg(bin_name)
-    if existing:
-        return str(existing)
-
-    async with _RG_DOWNLOAD_LOCK:
-        existing = _find_existing_rg(bin_name)
-        if existing:
-            return str(existing)
-
-        downloaded = await _download_and_install_rg(bin_name)
-        return str(downloaded)
 
 
 def _build_rg_args(rg_path: str, params: Params, *, single_threaded: bool = False) -> list[str]:
@@ -375,6 +225,55 @@ def _format_cmd(params: Params, *, rg_path: str = "rg") -> str:
     """Format the equivalent ripgrep command string for display."""
     args = _build_rg_args(rg_path, params)
     return shlex.join(args)
+
+
+def _build_ripgrepy(rg_path: str, params: Params, *, single_threaded: bool = False) -> Ripgrepy:
+    """Build a Ripgrepy instance from Params, using its chainable API."""
+    resolved_path = os.path.expanduser(normalize_user_path(params.path))
+    rg = Ripgrepy(params.pattern, resolved_path, rg_path=rg_path)
+
+    # Fixed args
+    if params.output_mode != "content":
+        rg = rg.max_columns(500)
+    rg = rg.hidden()
+    if params.include_ignored:
+        rg = rg.no_ignore()
+    for vcs_dir in (".git", ".svn", ".hg", ".bzr", ".jj", ".sl"):
+        rg = rg.glob(f"!{vcs_dir}")
+
+    if single_threaded:
+        rg = rg.threads(1)
+
+    # Search options
+    if params.ignore_case:
+        rg = rg.ignore_case()
+    if params.multiline:
+        rg = rg.multiline().multiline_dotall()
+
+    # Content display options (only for content mode)
+    if params.output_mode == "content":
+        if params.before_context is not None:
+            rg = rg.before_context(params.before_context)
+        if params.after_context is not None:
+            rg = rg.after_context(params.after_context)
+        if params.context is not None:
+            rg = rg.context(params.context)
+        if params.line_number:
+            rg = rg.line_number()
+
+    # File filtering options
+    if params.glob:
+        rg = rg.glob(params.glob)
+    if params.type:
+        rg = rg.type_(params.type)
+
+    # Output mode
+    if params.output_mode == "files_with_matches":
+        rg = rg.files_with_matches()
+    elif params.output_mode == "count_matches":
+        rg = rg.count_matches()
+
+    return rg
 
 
 async def _read_stream(
@@ -632,17 +531,12 @@ class Grep(CallableTool2[Params]):
     field_aliases = {**FIELD_ALIASES_GENERAL, **FIELD_ALIASES_FILE, **FIELD_ALIASES_WEB}
 
     def __init__(self, runtime: Runtime, vfs: VFS | None = None) -> None:
-        self._rg_path: str | None = None
-        self._rg_path_task: asyncio.Task[str] | None = None
+        self._rg_path: str | None = _find_rg_path()
         super().__init__(self.name, self.description, self.params)
-        self._rg_path_task = asyncio.create_task(_ensure_rg_path())
         self._runtime = runtime
         self._work_dir = runtime.builtin_args.KIMI_WORK_DIR
         self._additional_dirs = runtime.additional_dirs
         self._vfs = vfs
-    def __del__(self) -> None:
-        if self._rg_path_task is not None and not self._rg_path_task.done():
-            self._rg_path_task.cancel()
     @override
     async def __call__(self, params: Params, *, _retry: bool = False) -> ToolReturnValue:
         has_dirty = (
@@ -652,16 +546,9 @@ class Grep(CallableTool2[Params]):
         )
         if has_dirty:
             return await self.backup_grep(params)
-
-        if self._rg_path_task is not None:
-            try:
-                self._rg_path = await self._rg_path_task
-            except Exception:
-                self._rg_path = None
-            self._rg_path_task = None
-
         if self._rg_path is None:
             return await self.backup_grep(params)
+
         try:
             builder = ToolResultBuilder()
             message = ""
@@ -682,53 +569,33 @@ class Grep(CallableTool2[Params]):
                     brief=f"Reserved device name | {_format_cmd(params)}",
                 )
 
-            args = _build_rg_args(rg_path, params, single_threaded=_retry)
+            # Build and run ripgrepy
+            rg = _build_ripgrepy(rg_path, params, single_threaded=_retry)
 
-            # Execute search as async subprocess (non-blocking, cancellable)
-            process = await asyncio.create_subprocess_exec(
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-            # Stream stdout/stderr incrementally with buffer limit
-            stdout_buf = bytearray()
-            stderr_buf = bytearray()
             timed_out = False
-            stdout_truncated_flag: list[bool] = [False]
+            buffer_truncated = False
+            output = ""
+            stderr_str = ""
 
             try:
-                assert process.stdout is not None
-                assert process.stderr is not None
-                await asyncio.wait_for(
-                    asyncio.gather(
-                        _read_stream(
-                            process.stdout, stdout_buf, RG_MAX_BUFFER, stdout_truncated_flag
-                        ),
-                        _read_stream(process.stderr, stderr_buf, RG_MAX_BUFFER),
-                    ),
+                # Run ripgrepy in a thread pool executor with timeout
+                loop = asyncio.get_running_loop()
+                # Pass universal_newlines=False to avoid gbk decode errors on Chinese Windows
+                result: _RipGrepOut = await asyncio.wait_for(
+                    loop.run_in_executor(None, lambda: rg.run(universal_newlines=False)),
                     timeout=RG_TIMEOUT,
                 )
-                await process.wait()
+                # ripgrepy's run() stores stdout on success, stderr on error
+                output = result.as_string
+                # We can get the exit code from the command output
+                # ripgrepy doesn't expose returncode, but we can infer:
+                # - empty output + no error => no matches (exit 1)
+                # - output present => matches found (exit 0) or error (exit 2+)
+                # We check for error patterns in the output
             except asyncio.CancelledError:
-                await _kill_process(process)
                 raise
             except TimeoutError:
-                await _kill_process(process)
                 timed_out = True
-
-            output = stdout_buf.decode("utf-8", errors="replace")
-            stderr_str = stderr_buf.decode("utf-8", errors="replace")
-
-            # truncated_flag is set synchronously inside _read_stream at
-            # the moment of truncation, so it's available even after timeout.
-            buffer_truncated = stdout_truncated_flag[0]
-
-            # Drop last incomplete line if buffer was truncated
-            if buffer_truncated:
-                last_nl = output.rfind("\n")
-                output = output[:last_nl] if last_nl >= 0 else ""
-                message = "Output exceeded buffer limit. Some results omitted."
 
             # Timeout: return partial results if available, otherwise error
             if timed_out:
@@ -743,14 +610,14 @@ class Grep(CallableTool2[Params]):
                 timeout_msg = f"Grep timed out after {RG_TIMEOUT}s. Partial results returned."
                 message = f"{message} {timeout_msg}" if message else timeout_msg
 
-            # rg exit codes: 0=matches found, 1=no matches, 2+=error
-            if not timed_out and process.returncode not in (0, 1):
+            # Detect rg errors: error messages start with "error:" or "rg:"
+            if output and (output.startswith("error:") or output.startswith("rg:") or "regex parse error" in output):
                 # EAGAIN: retry once with single-threaded mode
-                if not _retry and _is_eagain(stderr_str):
+                if not _retry and _is_eagain(output):
                     logger.warning("rg EAGAIN error, retrying with -j 1")
                     return await self.__call__(params, _retry=True)
                 return ToolError(
-                    message=f"Failed to grep. Error: {stderr_str}",
+                    message=f"Failed to grep. Error: {output}",
                     brief=f"Failed to grep | {_format_cmd(params)}",
                 )
 
@@ -878,7 +745,7 @@ class Grep(CallableTool2[Params]):
             lines = _normalize_output_lines(lines, params.output_mode)
             output, truncated_by_bytes = _join_with_byte_limit(lines)
 
-            if not output and not buffer_truncated:
+            if not output:
                 no_match_msg = "No matches found"
                 if message:
                     no_match_msg = f"{no_match_msg}. {message}"
