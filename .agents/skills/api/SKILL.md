@@ -1,11 +1,11 @@
 ---
 name: api
-description: Guide for using Kimi API utilities (session management, prompts, colorful printing, threading)
+description: Guide for using Kimi API utilities covering kimix, kimix.utils, kimix.base, kimix.dag, kimix.network, kimix.server, kimix.parser, kimix.tools, kimix.cot, kimix.retrieval, kimix.summarize, and kimi_agent_sdk.
 ---
 
 # Kimi API Utilities Guide
 
-This guide explains how to use the utility functions from `kimix.utils` and `kimix.base` for session management, prompting, colorful printing, and threading.
+This guide explains how to use the utility functions from `kimix.utils`, `kimix.base`, and the full public API surface of `src/kimix` and `src/kimi_agent_sdk`.
 
 ## Session Management (kimix.utils)
 
@@ -14,6 +14,7 @@ This guide explains how to use the utility functions from `kimix.utils` and `kim
 Create a new or resume an existing Kimi session.
 
 ```python
+# File: src/kimix/utils/session.py
 from kimix.utils import create_session
 from kaos.path import KaosPath
 from kimix.utils.system_prompt import SystemPromptType
@@ -50,6 +51,7 @@ await close_session_async(session)
 Async version of `create_session` for use in async contexts.
 
 ```python
+# File: src/kimix/utils/session.py
 from kimix.utils.session import _create_session_async
 
 session = await _create_session_async(
@@ -68,6 +70,7 @@ session = await _create_session_async(
 Convenience wrapper to create a Supervisor session with `agent_boss.json`.
 
 ```python
+# File: src/kimix/utils/session.py
 from kimix.utils import create_supervisor_session
 
 session = create_supervisor_session(
@@ -80,6 +83,7 @@ session = create_supervisor_session(
 ### Default Session
 
 ```python
+# File: src/kimix/utils/session.py
 from kimix.utils import get_default_session, _create_default_session
 
 # Get or create the global default session
@@ -96,6 +100,7 @@ session = get_default_session()
 Send a prompt to the Kimi agent and get a response.
 
 ```python
+# File: src/kimix/utils/prompt.py
 from kimix.utils import prompt, prompt_async
 
 # Simple prompt
@@ -125,6 +130,7 @@ await prompt_async("Analyze this code", session=session)
 ### Cancel Prompt
 
 ```python
+# File: src/kimix/utils/session.py
 from kimix.utils import cancel_prompt, get_cancel_event
 
 # Cancel the current prompt on a session
@@ -137,6 +143,7 @@ event = get_cancel_event(session)
 ### Context Management
 
 ```python
+# File: src/kimix/utils/session.py
 from kimix.utils import clear_default_context, compact_default_context, print_usage, delete_session_dir, context_path
 
 # Clear current context and start fresh
@@ -158,6 +165,7 @@ delete_session_dir()
 ### Ralph Loop Control
 
 ```python
+# File: src/kimix/utils/session.py
 from kimix.utils import set_ralph_loop
 
 # Set max Ralph iterations for a session (and default for future sessions)
@@ -168,6 +176,7 @@ set_ralph_loop(value=4, session=session)  # session=None uses default session
 ### Tool Call Errors
 
 ```python
+# File: src/kimix/utils/session.py
 from kimix.utils import get_tool_call_errors
 
 # Get failed tool calls for a session
@@ -178,6 +187,7 @@ errors = get_tool_call_errors(session)
 ## System Prompt Types (kimix.utils.system_prompt)
 
 ```python
+# File: src/kimix/utils/system_prompt.py
 from kimix.utils.system_prompt import SystemPromptType, SystemPromptCallback, get_system_prompt
 
 # Available agent types:
@@ -207,6 +217,7 @@ system_prompts = get_system_prompt(
 ### Basic Print Functions
 
 ```python
+# File: src/kimix/base.py
 from kimix.base import (
     print_success,    # Green bold - success messages
     print_error,      # Red bold - error messages
@@ -228,6 +239,7 @@ print_string("Plain output")
 ### Advanced Color Printing
 
 ```python
+# File: src/kimix/base.py
 from kimix.base import colorful_print, colorful_text, Color, BgColor, Style
 
 # Full control over colors and styles
@@ -252,6 +264,7 @@ colored = colorful_text("Warning", fg=Color.YELLOW, styles=[Style.BOLD])
 ### Print Agent JSON
 
 ```python
+# File: src/kimix/base.py
 from kimix.base import print_agent_json
 
 # Pretty-print streaming wire messages from the agent session
@@ -275,6 +288,7 @@ print_agent_json(
 ### Running Functions in Background
 
 ```python
+# File: src/kimix/base.py
 from kimix.base import run_thread, sync_all
 
 # Run function in background thread (max 8 concurrent)
@@ -291,6 +305,7 @@ sync_all()
 ### Async Prompt Helpers
 
 ```python
+# File: src/kimix/utils/fix_error.py
 from kimix.utils import async_prompt, async_fix_error
 
 # Run prompt in background thread (creates new session if None, closes after)
@@ -308,6 +323,7 @@ thread = async_fix_error(
 ### Process Execution
 
 ```python
+# File: src/kimix/base.py
 from kimix.base import run_process_with_error, run_process_with_error_async
 
 # Run command and capture output with error detection
@@ -328,6 +344,7 @@ error_output = await run_process_with_error_async(
 ### Run Script in New Console
 
 ```python
+# File: src/kimix/base.py
 from kimix.base import run_script
 
 # Launch a Python script in a new console window
@@ -337,6 +354,7 @@ proc = run_script("./my_script.py")
 ## File Operations (kimix.utils)
 
 ```python
+# File: src/kimix/utils/prompt.py
 from kimix.utils import prompt_path
 from pathlib import Path
 
@@ -355,6 +373,7 @@ prompt_path(
 ## Error Fix Loop (kimix.utils)
 
 ```python
+# File: src/kimix/utils/fix_error.py
 from kimix.utils import fix_error
 from kimix.utils.fix_error import fix_error_async
 
@@ -386,6 +405,7 @@ success = await fix_error_async(
 ### PlanLoader
 
 ```python
+# File: src/kimix/utils/prompt.py
 from kimix.utils.prompt import PlanLoader
 from pathlib import Path
 
@@ -403,6 +423,7 @@ hash = PlanLoader.compute_hash("content string")
 ### execute_plan / check_plan_cache
 
 ```python
+# File: src/kimix/utils/prompt.py
 from kimix.utils import execute_plan, check_plan_cache
 
 # Execute a complex task with plan caching support
@@ -422,6 +443,7 @@ use_cache, plan_loader = check_plan_cache(ask_if_use_cache=lambda path: True)
 Default configuration values you can import and modify:
 
 ```python
+# File: src/kimix/base.py
 from kimix.base import (
     _default_thinking,       # Deep thinking mode (default: True)
     _default_yolo,           # Yolo mode (default: True)
@@ -443,6 +465,7 @@ from kimix.base import (
 ### Configuration Setters
 
 ```python
+# File: src/kimix/base.py
 from kimix.base import (
     set_default_thinking,
     set_default_yolo,
@@ -470,6 +493,7 @@ set_default_supervisor(True)  # Use Supervisor role for default sessions
 ### Skill Directories
 
 ```python
+# File: src/kimix/base.py
 from kimix.base import get_skill_dirs
 
 # Auto-discover skill directories (checked paths: .agents/skills, .config/.agents/skills, .opencode/skills, skills)
@@ -479,6 +503,7 @@ dirs = get_skill_dirs(use_kaos_path=True)
 ### Utility Functions
 
 ```python
+# File: src/kimix/base.py
 from kimix.base import percentage_str, percentage_and_token, generate_memory
 
 # Format number as percentage string
@@ -494,6 +519,7 @@ generate_memory  # String constant with structured memory generation instruction
 ### Path Utilities
 
 ```python
+# File: src/kimix/utils/session.py
 from kimix.utils import make_kaos_dir
 from kaos.path import KaosPath
 
@@ -506,6 +532,7 @@ kaos_path = make_kaos_dir("./my_folder")
 ### TextSearchIndex
 
 ```python
+# File: src/kimix/utils/_globals.py
 from kimix.utils import TextSearchIndex, SearchResult, _ensure_text_search
 
 # Lazy-load search classes (from kimix.tools.skill.faiss.text_search)
@@ -519,6 +546,7 @@ results: list[SearchResult] = index.search("query")
 ## Prompt String Utilities (kimix.utils.prompt_str)
 
 ```python
+# File: src/kimix/utils/prompt_str.py
 from kimix.utils.prompt_str import escape_file_paths, clean_text
 
 # Sanitize prompt text: detect file paths and wrap in backticks,
@@ -541,6 +569,7 @@ cleaned = clean_text(text, keep_newlines=True)
 ## Complete Example
 
 ```python
+# File: src/kimix/utils/session.py
 """Example script using Kimi API utilities."""
 from pathlib import Path
 from kimix.utils import create_session, prompt, close_session, clear_default_context
@@ -587,6 +616,7 @@ finally:
 ## Common Imports
 
 ```python
+# File: src/kimix/utils/__init__.py
 # Core utilities (kimix.utils.__all__)
 from kimix.utils import (
     create_session, close_session, close_session_async,
@@ -628,3 +658,326 @@ from kimix.base import (
 from pathlib import Path
 import asyncio
 ```
+
+## `kimi_agent_sdk` — Kimi Agent SDK
+
+This is a Python SDK for building AI agents powered by Kimi.
+
+### High-level API
+
+```python
+# File: src/kimi_agent_sdk/_prompt.py
+import asyncio
+import kimi_agent_sdk
+
+async def main():
+    async for msg in kimi_agent_sdk.prompt(
+        "Write a Python script that greets the user",
+        work_dir="./workspace",
+        thinking=True,
+        yolo=False,
+    ):
+        print(msg)
+
+asyncio.run(main())
+```
+
+- `kimi_agent_sdk.prompt(user_input, *, work_dir=None, config=None, model=None, thinking=False, yolo=False, approval_handler_fn=None, agent_file=None, mcp_configs=None, skills_dir=None, skills_dirs=None, max_steps_per_turn=None, max_retries_per_step=None, max_ralph_iterations=None, final_message_only=False)` — async generator yielding `Message` objects.
+- `ApprovalHandlerFn` — type alias for sync/async callback `(ApprovalRequest) -> None`.
+
+### Low-level API
+
+```python
+# File: src/kimi_agent_sdk/_session.py
+import asyncio
+import kimi_agent_sdk
+
+async def main():
+    async with kimi_agent_sdk.Session.create(
+        work_dir="./workspace",
+        thinking=True,
+        yolo=False,
+    ) as session:
+        async for wire in session.prompt("Hello, agent!"):
+            print(wire)
+        
+        print("Session ID:", session.id)
+        print("Model:", session.model_name)
+        print("Status:", session.status)
+        
+        # Export context to file
+        path, token_count = session.export()
+        
+        # Compact to reduce token usage
+        await session.compact("Keep the key decisions")
+        
+        # Rename session
+        await session.rename("my-renamed-session")
+        
+        # Cancel ongoing prompt
+        await session.cancel()
+        
+        # Clear context and start fresh
+        await session.clear()
+
+asyncio.run(main())
+```
+
+- `kimi_agent_sdk.Session` — async context manager with methods:
+  - `Session.create(work_dir=None, *, session_id=None, config=None, model=None, thinking=False, yolo=False, plan_mode=False, agent_file=None, mcp_configs=None, skills_dir=None, skills_dirs=None, anonymous=False, max_steps_per_turn=None, max_retries_per_step=None, max_ralph_iterations=None, **custom_arguments)`
+  - `Session.resume(work_dir, session_id=None, *, ...)`
+  - `session.prompt(user_input, *, merge_wire_messages=False)` — async generator yielding `WireMessage`
+  - `session.cancel()`
+  - `session.close()`
+  - `session.clear(**custom_arguments)`
+  - `session.rename(new_session_id)`
+  - `session.compact(custom_instruction="")`
+  - `session.export(output_path=None) -> tuple[Path, int]`
+  - `session.id` (property)
+  - `session.model_name` (property)
+  - `session.status` (property, returns `StatusSnapshot`)
+  - `session.get_custom_data()`
+  - `session.get_custom_config()`
+
+### Re-exported types from `kimi_agent_sdk.__all__`
+
+- **Core:** `prompt`, `Session`, `ExportedContext`
+- **Approval:** `ApprovalHandlerFn`, `ApprovalRequest`
+- **Message types:** `Message`, `ContentPart`, `TextPart`, `ThinkPart`, `ImageURLPart`, `AudioURLPart`, `VideoURLPart`, `ToolCall`
+- **Wire types:** `WireMessage`, `Event`, `Request`, `TurnBegin`, `TurnEnd`, `StepBegin`, `StepInterrupted`, `CompactionBegin`, `CompactionEnd`, `StatusUpdate`, `ToolCallPart`, `ToolResult`, `ToolReturnValue`, `ApprovalResponse`, `SubagentEvent`, `DisplayBlock`, `BriefDisplayBlock`, `DiffDisplayBlock`, `ShellDisplayBlock`, `TodoDisplayBlock`, `TodoDisplayItem`, `TokenUsage`, `is_event`, `is_request`
+- **Tooling:** `CallableTool2`, `ToolOk`, `ToolError`
+- **Exceptions:** `KimiAgentException` (alias for `KimiCLIException`), `ConfigError`, `AgentSpecError`, `InvalidToolError`, `MCPConfigError`, `MCPRuntimeError`, `SystemPromptTemplateError`, `LLMNotSet`, `LLMNotSupported`, `ChatProviderError`, `APIConnectionError`, `APITimeoutError`, `APIStatusError`, `APIEmptyResponseError`, `MaxStepsReached`, `RunCancelled`, `PromptValidationError`, `SessionStateError`
+- **Config:** `Config`, `MCPConfig`
+
+### Internal Aggregator
+
+- `MessageAggregator(final_message_only=False)` — aggregates `WireMessage` stream into `Message` stream.
+  - `feed(msg) -> list[Message]`
+  - `flush() -> list[Message]`
+
+## `kimix.dag` — DAG Task Dependency Execution
+
+Package exports: `Context`, `DAG`, `TaskNode`, `Executor`, `TopologicalSorter`, `CycleError`, `DAGValidationError`, `DependencyError`, `ExecutionError`, `detect_cycle`, `validate_dag`
+
+```python
+# File: src/kimix/dag/dag.py
+from kimix.dag import DAG, TaskNode, Executor, Context
+
+# Build a DAG
+dag = DAG()
+dag.add_node(TaskNode("A", lambda ctx: "result A"))
+dag.add_node(TaskNode("B", lambda ctx: f"result B using {ctx.get('A')}", dependencies=["A"]))
+dag.add_node(TaskNode("C", lambda ctx: "result C", dependencies=["A"]))
+dag.add_node(TaskNode("D", lambda ctx: "result D", dependencies=["B", "C"]))
+
+# Execute with a context
+ctx = Context()
+executor = Executor(max_workers=4)
+results = executor.execute(dag, ctx=ctx)
+print(results)  # {"A": "result A", "B": "result B using result A", ...}
+```
+
+- `DAG` — `add_node(node)`, `add_edge(upstream, downstream)`, `get_node(name)`, `validate()`, `nodes`, `edges`
+- `TaskNode(name, func, params=None, dependencies=None, retries=0)` — `execute(ctx)`, `mark_done(result, error)`, `done`, `name`, `func`, `params`, `dependencies`, `retries`, `result`, `error`
+- `Context` — `cancel()`, `cancelled`, `check_cancelled()`, `get(key, default)`, `set(key, value)`, `update(other_dict)`
+- `Executor(max_workers=None)` — `execute(dag, ctx=None) -> dict[str, Any]`
+- `TopologicalSorter(edges)` — `sort() -> list[str]`
+- Exceptions: `DAGValidationError(ValueError)`, `CycleError(DAGValidationError)`, `DependencyError(RuntimeError)`, `ExecutionError(RuntimeError)` with `.errors: dict[str, Exception]`
+- `detect_cycle(graph) -> list[str] | None`
+- `validate_dag(nodes, edges)`
+
+## `kimix.network` — TCP / JSON-RPC Networking
+
+### TCP Client / Server
+
+```python
+# File: src/kimix/network/tcp_client.py, src/kimix/network/tcp_server.py
+from kimix.network.tcp_client import TCPClient
+from kimix.network.tcp_server import TCPServer
+
+client = TCPClient(host="127.0.0.1", port=8888)
+await client.connect()
+await client.send({"type": "hello"})
+await client.disconnect()
+
+server = TCPServer(host="127.0.0.1", port=8888)
+server.on_message(lambda msg: print("Received:", msg))
+await server.start(blocking=False)
+# ...
+await server.stop()
+```
+
+- `TCPClient(host="127.0.0.1", port=8888)` — `connect(blocking=False)`, `disconnect()`, `send(message)`, `send_bytes(data)`, `is_connected()`, `on_connect(callback)`, `on_disconnect(callback)`, `on_message(callback)`
+- `TCPServer(host="127.0.0.1", port=8888)` — `start(blocking=False)`, `stop()`, `send(message)`, `send_bytes(data)`, `disconnect_client()`, `is_client_connected()`, `on_connect(callback)`, `on_disconnect(callback)`, `on_message(callback)`, `on_raw_data(callback)`
+- `TcpGroupServer(host="127.0.0.1", port=8888, max_workers=10)` — `start(blocking=False)`, `stop()`, `send(client_id, message)`, `send_bytes(client_id, data)`, `broadcast(message)`, `disconnect_client(client_id)`, `get_client_ids()`, `get_client_count()`, `wait_for_clients(count, timeout=5.0)`, `on_client_connect(callback)`, `on_client_disconnect(callback)`, `on_message(callback)`, `on_raw_data(callback)`
+
+### JSON-RPC
+
+- `JSONRPCClient(host=DEFAULT_HOST, port=DEFAULT_PORT)` — `connect()`, `disconnect()`, `is_connected()`, `call(method, *args, timeout=5.0)`
+- `JSONRPCServer(host=DEFAULT_HOST, port=DEFAULT_PORT, max_workers=10, ...)` — `register(name, func)`, `register_function(func)`, `start(blocking=True)`, `stop()`, `get_client_count()`, `wait_for_connection(timeout=5.0)`, `disconnect_client(client_id)`, `start_websocket_server(ws_port, blocking=False)`, `stop_websocket_server()`
+
+## `kimix.server` — Opencode-Style HTTP Server (FastAPI + SSE)
+
+```python
+# File: src/kimix/server/app.py
+from kimix.server.app import create_app
+from kimix.server.client import KimixAsyncClient
+
+# Create and run the FastAPI app
+app = create_app()
+
+# Or use the async client to interact with a running server
+client = KimixAsyncClient(host="127.0.0.1", port=4096)
+
+async def interact():
+    session = await client.create_session(title="My Session")
+    sid = session["id"]
+    
+    async for event in client.stream_events_robust(sid):
+        print(event)
+    
+    await client.send_prompt_async(sid, "Hello, Kimi!")
+    await client.abort_session(sid)
+    await client.delete_session(sid)
+```
+
+- `create_app()` — returns FastAPI with routes: health, SSE event stream, session CRUD, prompt, abort, permissions, clear, context, compact, export
+- `BusEvent(type, properties)` — `to_dict()`, `to_json()`
+- `EventBus` — `subscribe(callback)`, `create_async_queue()`, `remove_async_queue(q)`, `emit(event)`, `emit_type(event_type, **properties)`; global `bus = EventBus()`
+- `KimixAsyncClient(host="127.0.0.1", port=4096, timeout=30.0)` — `health_check()`, `create_session(title=None)`, `get_session(id)`, `list_sessions()`, `delete_session(id)`, `get_messages(id, limit=10)`, `send_prompt_async(id, text, agent=None)`, `abort_session(id)`, `clear_session(id)`, `compact_session(id, keep=None)`, `export_session(id, output_path=None)`, `stream_events(session_id, timeout=14400.0)`, `stream_events_robust(session_id, timeout=14400.0, max_reconnects=5, reconnect_delay=2.0, on_reconnect=None)`
+- `SessionManager` — `create_session(title=None)`, `get_session(id)`, `get_sdk_session(id)`, `list_sessions()`, `delete_session(id)`, `get_session_status()`, `get_messages(id, limit=None)`, `prompt(id, text, agent=None)`, `prompt_async(...)`, `abort_session(id)`, `clear_session(id)`, `compact_session(id, keep=None)`, `export_session(id, output_path=None)`, `get_session_context(id, keep=None)`; global `session_manager = SessionManager()`
+- `serve_cli(args)` — CLI entry point for `kimix serve`
+
+## `kimix.parser` — Source Code Comment Parsers
+
+Package exports: `Comment`, `ParseResult`, `BaseParser`, `PythonParser`, `CParser`, `ShellParser`, `HtmlParser`, `PascalParser`, `LispParser`, `SqlParser`
+
+```python
+# File: src/kimix/parser/__init__.py
+from kimix.parser import PythonParser, ParseResult
+
+parser = PythonParser()
+result: ParseResult = parser.parse(source_code)
+print(f"Found {result.total_comments} comments")
+for c in result.comments:
+    print(f"Line {c.line}: {c.content}")
+```
+
+- `Comment(content, line, column, kind)`
+- `ParseResult(language, comments, code_without_comments)` — `total_comments`, `comment_lines`, `get_comments_by_kind(kind)`
+- `BaseParser` — abstract `parse(source_code) -> ParseResult`; concrete `parse_file(file_path, encoding="utf-8")`
+- Language parsers: `PythonParser`, `CParser`, `ShellParser`, `HtmlParser`, `PascalParser`, `LispParser`, `SqlParser`
+
+## `kimix.tools` — Built-in Agent Tools
+
+All tools are `CallableTool2` subclasses. Key ones:
+
+- `Agent` — launch sub-agent; params: `prompt`, `session_id`, `close_session=True`, `return_history=False`, `response`
+- `AskParent` — ask parent clarifying question; params: `question`, `context`
+- `AgentList` — list active sub-agent sessions
+- `AgentClose` — close sub-agent session; params: `session_id`
+- `TaskOutput` — get background task output; params: `task_id`, `block=True`, `timeout=60`, `output_path`, `kill=False`
+- `BackgroundStream` — `start(function, stop_function, input_function=None)`, `wait(timeout=None)`, `stop()`, `get_output()`, `pop_output()`, `input(data)`, `success()`
+- `Bash` / `Powershell` — shell execution; params: `cmd`, `timeout=10`
+- `Run` — run external executable; params: `command`, `timeout=10`, `output_path`, `cwd`, `env`, `run_in_background=False`
+- `Input` — send text to background process stdin; params: `task_id`, `text`
+- `FindStr` — search text in files; params: `content`, `path`, `case_sensitive=False`
+- `Mkdir` / `Rm` — create/remove directories
+- `Python` — execute Python code; params: `code`, `output_path`, `timeout=10`, `run_in_background=False`
+- `PySyntaxCheck` — check Python syntax with ruff; params: `file_path`
+- `SyntaxLint` — unified syntax lint dispatcher; params: `file_path`, `project_root=".", clangd_path="clangd", verbose=False`
+- `MypyCheck` — Python type check; params: `file_path`, `project_root=".", verbose=False`
+- `Cpplint` — C++ lint via clangd; params: `file_path`, `project_root=".", clangd_path="clangd", verbose=False`
+- `JsTsSyntaxCheck` — JS/TS syntax check via tree-sitter; params: `file_path`, `verbose=False`
+- `Ocr` — OCR from image; params: `image_path`, `output_path`, `language="eng"`, `preprocess=False`
+- `Docx2md` — convert DOCX to Markdown; params: `docx_path`, `output_path`
+- `Pdf2md` — convert PDF to Markdown; params: `pdf_path`, `output_path`, `extract_images=False`, `ocr=False`, `extract_tables=True`, `page_range`
+- `ParserTool` — parse/extract/strip comments; params: `language`, `source_code|file_path`, `mode="extract"`, `encoding="utf-8"`
+- `WritePlan` / `ReadPlan` / `EditPlan` — plan file tools
+- `StoreSession` / `LoadSession` / `LsSession` — key-value session persistence
+- `Search` — semantic skill search; params: `prompt`, `dest_path`
+- `FetchURL` — fetch web page as Markdown; params: `url`, `output_path`
+- `fetch_to_markdown(url, wait_until="networkidle")` — Playwright-based fetcher
+- `Zip` / `Unzip` — 7z archive tools; params: `source`, `destination`, `password`
+- `AddNode` / `AddEdge` — swarm DAG planning tools
+
+## `kimix.cot` — Chain-of-Thought
+
+```python
+# File: src/kimix/cot.py
+from kimix.cot import cot_prompt, cot_prompt_async, CoTResult
+
+# Synchronous CoT with self-verification
+result: CoTResult = cot_prompt(
+    "Explain quantum computing in simple terms",
+    self_verify=True,
+    max_iterations=10,
+)
+print(result.thinking)
+print("Quit:", result.quit)
+
+# Async version
+result = await cot_prompt_async("Explain quantum computing", self_verify=True)
+
+# Two-pass verification (sync)
+result = cot_prompt_with_verification("Complex reasoning task")
+
+# Two-pass verification (async)
+result = await cot_prompt_with_verification_async("Complex reasoning task")
+```
+
+- `CoTResult(thinking: str, quit: bool = False)`
+- `cot_prompt(prompt_str, self_verify=True, existing_thinking=None, max_iterations=10)` — sync
+- `cot_prompt_async(prompt_str, self_verify=True, existing_thinking=None, max_iterations=10)` — async
+- `cot_prompt_with_verification(prompt_str, existing_thinking=None)` — sync two-pass
+- `cot_prompt_with_verification_async(prompt_str, existing_thinking=None)` — async two-pass
+
+## `kimix.retrieval` — BM25 Retrieval Engine
+
+- `NgramTokenizer(n=2)` — `normalize(text)`, `tokenize(text, n=None)`
+- `InvertedIndex` — `add_document(doc_id, tokens)`, `finalize(stop_threshold=0.5, prune_df=None)`, `get_postings(term)`, `doc_freq(term)`, `has_term(term)`, `terms()`, `save(path)`, `load(path)`, `N`, `avgdl`, `doc_lengths`, `doc_lengths_arr`
+- `BM25Scorer(index, k1=1.2, b=0.75)` — `score(query_tokens, candidate_docs=None)`, `score_topk(query_tokens, top_k, candidate_docs=None)`
+- `LevenshteinAutomaton(pattern, max_edits, prefix_length=1)` — `auto_fuzziness(term)`, `match(dictionary, max_expansions=50)`
+- `Searcher(index, tokenizer=None, scorer=None, k1=1.2, b=0.75, min_should_match=0.5, fuzziness="AUTO", max_expansions=50, prefix_length=1)` — `search(query, top_k=10)`
+- `SimHash(text="", hashbits=64)` — `distance(other)`, `is_near_duplicate(other, threshold=3)`
+- `SimHashLSH(hashbits=64, band_bits=4)` — `add(doc_id, simhash)`, `candidates(simhash)`, `remove(doc_id)`
+- `RM3Expander(index, scorer, fb_docs=3, fb_terms=10, alpha=0.5)` — `expand(query_tokens, top_k=10)`
+- `RocchioExpander(index, scorer, alpha=1.0, beta=0.75, gamma=0.15, fb_docs=3, fb_terms=10)` — `expand(query_tokens, non_rel_docs=None)`
+- `LambdaMART(n_iterations=50, learning_rate=0.05)` / `CoordinateAscent` — `fit(X, y)`, `predict(X)`, `rank(doc_features)`
+- `QueryPerformancePredictor(index, scorer)` — `avg_idf(query_tokens)`, `max_idf(query_tokens)`, `query_scope(query_tokens)`, `is_hard_query(query_tokens, avg_idf_threshold=2.0)`
+- `RankSVM(learning_rate=0.01, n_iterations=1000, margin=1.0)` — `fit(X, y)`, `predict(X)`, `rank(doc_features)`
+- `RankBoost(n_iterations=100)` — `fit(X, y)`, `predict(X)`, `rank(doc_features)`
+- `MinHash(text="", num_perm=128, k=3)` — `jaccard(other)`
+- `NoisyChannelSpeller(dictionary, max_edits=2)` — `correct(word)`
+- Utility functions: `jaro_similarity`, `jaro_winkler_similarity`, `sorensen_dice_coefficient`, `ngram_overlap`, `jaccard_similarity_tokens`, `hamming_distance`, `cosine_similarity_tfidf`, `soundex`, `metaphone`, `porter_stem`, `clarity_score`, `scq`, `mmr_rerank`, `xquad_rerank`, `i_match_fingerprint`
+
+## `kimix.summarize` — Context Compaction
+
+- `summarize(temp_file=None, session=None, only_return_remember_str=False) -> str | None`
+- `summarize_mistake(result_file, session=None)`
+
+## `kimix.cli` — CLI Entry Point
+
+- `cli()` — launches the interactive Kimix CLI
+
+## Complete Package Index
+
+| Package / Module | Description |
+|------------------|-------------|
+| `kimi_agent_sdk` | Python SDK for building AI agents powered by Kimi (Session, prompt, wire/message types, config, exceptions) |
+| `kimix.base` | Core base utilities: colorful printing, threading helpers, process execution, configuration variables |
+| `kimix.cli` | Interactive CLI entry point (`cli()`) |
+| `kimix.cot` | Chain-of-thought reasoning utilities (`cot_prompt`, `CoTResult`) |
+| `kimix.dag` | DAG task dependency execution engine (`DAG`, `TaskNode`, `Executor`, `Context`) |
+| `kimix.network` | TCP / JSON-RPC networking layer (`TCPClient`, `TCPServer`, `JSONRPCClient`, `JSONRPCServer`) |
+| `kimix.parser` | Source code comment parsers for multiple languages (`PythonParser`, `CParser`, etc.) |
+| `kimix.retrieval` | BM25 retrieval engine, fuzzy search, ranking, and query performance prediction |
+| `kimix.server` | Opencode-style HTTP server with FastAPI + SSE (`create_app`, `KimixAsyncClient`, `SessionManager`) |
+| `kimix.summarize` | Context compaction / summarization helpers |
+| `kimix.tools` | Built-in agent tools: shell, Python, file ops, OCR, PDF/DOCX conversion, linting, planning |
+| `kimix.utils` | High-level session management, prompting, plan execution, error fixing, search, prompt string utilities |
+| `kimix.utils.fix_error` | Iterative error detection and auto-fix loop |
+| `kimix.utils.prompt` | Plan caching and plan execution helpers (`PlanLoader`, `execute_plan`) |
+| `kimix.utils.prompt_str` | Prompt sanitization: escape file paths, clean invisible characters |
+| `kimix.utils.session` | Session creation, resumption, and lifecycle management |
+| `kimix.utils.system_prompt` | System prompt types and builders for different agent roles |
