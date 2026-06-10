@@ -480,6 +480,40 @@ class KimiToolset:
                         if len_bytes > MAX_BYTES:   # Add by Maxwell: process large size
                             temp_file = _export_to_temp_file(ret.output)
                             ret.output = f'Output too large ({len_bytes} bytes), exported to `{temp_file}`'
+                    else:
+                        # Handle list[ContentPart] or single ContentPart
+                        parts = ret.output if isinstance(ret.output, list) else [ret.output]
+                        total_bytes = 0
+                        for part in parts:
+                            if isinstance(part, TextPart):
+                                total_bytes += len(part.text.encode("utf-8"))
+                            elif isinstance(part, ThinkPart):
+                                total_bytes += len(part.think.encode("utf-8"))
+                            elif isinstance(part, ImageURLPart):
+                                total_bytes += len(part.image_url.url.encode("utf-8"))
+                            elif isinstance(part, AudioURLPart):
+                                total_bytes += len(part.audio_url.url.encode("utf-8"))
+                            elif isinstance(part, VideoURLPart):
+                                total_bytes += len(part.video_url.url.encode("utf-8"))
+                        if total_bytes > MAX_BYTES:
+                            lines: list[str] = []
+                            for part in parts:
+                                if isinstance(part, TextPart):
+                                    lines.append(part.text)
+                                elif isinstance(part, ThinkPart):
+                                    lines.append(f"<thinking>\n{part.think}\n</thinking>")
+                                elif isinstance(part, ImageURLPart):
+                                    lines.append("[image]")
+                                elif isinstance(part, AudioURLPart):
+                                    lines.append("[audio]")
+                                elif isinstance(part, VideoURLPart):
+                                    lines.append("[video]")
+                                else:
+                                    lines.append(f"[{part.type}]")
+                            output_str = "\n".join(lines)
+                            temp_file = _export_to_temp_file(output_str)
+                            msg = TextPart(text=f'Output too large ({total_bytes} bytes), exported to `{temp_file}`')
+                            ret.output = [msg] if isinstance(ret.output, list) else msg
                 except Exception as e:
                     tool_elapsed = time.monotonic() - t0
                     logger.exception(

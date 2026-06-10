@@ -42,6 +42,12 @@ class Search(CallableTool2[IndexerParams]):
                 message='Recursive sub-agent call detected',
                 brief='sub-agent recursively'
             )
+        if len(params.prompt.encode('utf-8')) > 128 * 1024:
+            return ToolError(
+                output='',
+                message='Prompt is too long (exceeds 128KB limit)',
+                brief='prompt too long'
+            )
         async with self._semaphore:
             try:
                 output_strs = []

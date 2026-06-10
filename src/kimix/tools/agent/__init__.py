@@ -206,6 +206,12 @@ class Agent(CallableTool2):
                 message='Recursive sub-agent call detected',
                 brief='sub-agent recursively'
             )
+        if len(params.prompt.encode('utf-8')) > 128 * 1024:
+            return ToolError(
+                output='',
+                message='Prompt is too long (exceeds 128KB limit)',
+                brief='prompt too long'
+            )
         async with self._semaphore:
             try:
                 session, session_id, is_reused = await self._resolve_session(params)

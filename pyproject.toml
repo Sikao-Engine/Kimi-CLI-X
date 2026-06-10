@@ -27,7 +27,6 @@ dependencies = [
     "orjson>=3.10.0",
     "pydantic>=2.0.0",
     "opencc-python-reimplemented>=0.1.7",
-    "prompt_toolkit>=3.0.0",
 ]
 
 [project.optional-dependencies]
