@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kimix SSE Web Frontend</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>⚡ Kimix SSE Web Frontend</h1>
+    </header>
+
+    <!-- Connection Panel -->
+    <section id="connection-panel">
+      <div class="row">
+        <label for="host">Host:</label>
+        <input id="host" type="text" value="127.0.0.1" placeholder="127.0.0.1" />
+        <label for="port">Port:</label>
+        <input id="port" type="number" value="4096" min="1" max="65535" />
+        <button id="connect-btn">Connect</button>
+        <button id="disconnect-btn" disabled>Disconnect</button>
+        <label class="debug-label">
+          <input id="debug-check" type="checkbox" />
+          Debug
+        </label>
+      </div>
+      <div class="row" id="status-row">
+        <span>Status: <span id="status" class="status-error">Disconnected</span></span>
+        <span>Session: <code id="session-id">—</code></span>
+      </div>
+    </section>
+
+    <!-- Command Bar -->
+    <section id="command-bar">
+      <button id="btn-new" disabled>/new</button>
+      <button id="btn-abort" disabled>/abort</button>
+      <button id="btn-status" disabled>/status</button>
+      <button id="btn-sessions" disabled>/sessions</button>
+      <button id="btn-messages" disabled>/messages</button>
+      <button id="btn-clear" disabled>/clear</button>
+      <button id="btn-compact" disabled>/compact</button>
+      <button id="btn-export" disabled>/export</button>
+    </section>
+
+    <!-- Output Area -->
+    <section id="output-panel">
+      <div id="output"></div>
+    </section>
+
+    <!-- Input Area -->
+    <section id="input-panel">
+      <input
+        id="prompt"
+        type="text"
+        placeholder="Type a message or /command..."
+        disabled
+      />
+      <button id="send-btn" disabled>Send</button>
+    </section>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

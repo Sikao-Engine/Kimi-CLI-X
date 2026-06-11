@@ -1,0 +1,335 @@
+/* styles.css — Styling for Kimix SSE Web Frontend */
+
+:root {
+  --bg: #1e1e2e;
+  --fg: #cdd6f4;
+  --surface: #181825;
+  --surface2: #313244;
+  --border: #45475a;
+  --accent: #89b4fa;
+  --green: #a6e3a1;
+  --red: #f38ba8;
+  --yellow: #f9e2af;
+  --cyan: #89dceb;
+  --magenta: #cba6f7;
+  --gray: #6c7086;
+  --white: #cdd6f4;
+  --font: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 8px;
+}
+
+header h1 {
+  font-size: 1.2rem;
+  padding: 8px;
+  color: var(--accent);
+}
+
+/* ── Connection Panel ─────────────────────────────────────── */
+
+#connection-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+#status-row {
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--gray);
+}
+
+label {
+  color: var(--gray);
+  font-size: 0.85rem;
+}
+
+input[type="text"],
+input[type="number"] {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 6px 10px;
+  font-family: var(--font);
+  font-size: 0.9rem;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+input#host {
+  width: 150px;
+}
+
+input#port {
+  width: 80px;
+}
+
+button {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 6px 14px;
+  font-family: var(--font);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+button:hover:not(:disabled) {
+  background: var(--border);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#connect-btn {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  font-weight: bold;
+}
+
+#connect-btn:hover:not(:disabled) {
+  background: #74c7ec;
+}
+
+#disconnect-btn {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+#disconnect-btn:hover:not(:disabled) {
+  background: var(--red);
+  color: var(--bg);
+}
+
+.debug-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.status-ok {
+  color: var(--green) !important;
+}
+
+.status-error {
+  color: var(--red) !important;
+}
+
+code {
+  color: var(--accent);
+  background: var(--surface2);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+/* ── Command Bar ───────────────────────────────────────────── */
+
+#command-bar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+#command-bar button {
+  font-size: 0.8rem;
+  padding: 4px 10px;
+}
+
+/* ── Output Panel ──────────────────────────────────────────── */
+
+#output-panel {
+  flex: 1;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  min-height: 200px;
+}
+
+#output {
+  height: 100%;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+/* ── Log Lines ─────────────────────────────────────────────── */
+
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: 2px;
+}
+
+.log-line.info {
+  color: var(--gray);
+}
+
+.log-line.error {
+  color: var(--red);
+}
+
+.log-line.debug {
+  color: var(--gray);
+  font-style: italic;
+}
+
+.log-line.user-input {
+  color: var(--white);
+}
+
+/* ── Message Parts ─────────────────────────────────────────── */
+
+.msg-part {
+  display: inline;
+}
+
+.part-text {
+  color: var(--fg);
+}
+
+.part-thinking {
+  color: var(--cyan);
+}
+
+.part-tool-calling {
+  display: block;
+  color: var(--magenta);
+  margin: 4px 0;
+}
+
+.part-tool-calling-part {
+  color: var(--magenta);
+}
+
+.part-tool-result {
+  color: var(--green);
+  display: block;
+  margin: 2px 0;
+}
+
+.part-tool-result.tool-error {
+  color: var(--red);
+}
+
+.part-step-start {
+  color: var(--yellow);
+  display: block;
+  margin: 4px 0;
+}
+
+.part-step-finish {
+  color: var(--yellow);
+  display: block;
+  margin: 4px 0;
+}
+
+.part-unknown {
+  color: var(--gray);
+}
+
+/* ── Tool Detail Lines ─────────────────────────────────────── */
+
+.tool-header {
+  color: var(--magenta);
+}
+
+.tool-details {
+  color: var(--gray);
+  font-size: 0.85rem;
+}
+
+.detail-line {
+  color: var(--gray);
+}
+
+.detail-line.error {
+  color: var(--red);
+}
+
+/* ── Input Panel ───────────────────────────────────────────── */
+
+#input-panel {
+  display: flex;
+  gap: 8px;
+}
+
+#prompt {
+  flex: 1;
+  padding: 8px 12px;
+}
+
+#send-btn {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  font-weight: bold;
+  padding: 8px 20px;
+}
+
+#send-btn:hover:not(:disabled) {
+  background: #74c7ec;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gray);
+}

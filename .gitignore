@@ -10,3 +10,5 @@ clone_submodule.py
 sse_log_*
 src/kimix/default_config.json
 nul
+src/app/dist
+node_modules/

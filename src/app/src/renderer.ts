@@ -1,0 +1,134 @@
+// renderer.ts — Message rendering mirroring _print_message_part from sse_cli.py
+
+import { MessagePartType } from "./types";
+import type { MessagePart } from "./types";
+
+/** Truncate long strings, keeping head and tail. */
+export function fmtArg(s: string, maxLen: number = 120): string {
+  if (s.length <= maxLen) return s;
+  const head = Math.floor(maxLen / 2);
+  const tail = maxLen - head - 3;
+  return s.slice(0, head) + "..." + s.slice(-tail);
+}
+
+/** Format unix timestamp to HH:MM:SS. */
+export function fmtTs(unixT: number | null): string {
+  if (!unixT) return "";
+  return new Date(unixT * 1000).toLocaleTimeString("en-US", { hour12: false });
+}
+
+/** Map MessagePartType to CSS class name. */
+function partTypeClass(type: MessagePartType): string {
+  switch (type) {
+    case MessagePartType.TEXT:
+      return "part-text";
+    case MessagePartType.THINKING:
+      return "part-thinking";
+    case MessagePartType.TOOL_CALLING:
+      return "part-tool-calling";
+    case MessagePartType.TOOL_CALLING_PART:
+      return "part-tool-calling-part";
+    case MessagePartType.TOOL_RESULT:
+      return "part-tool-result";
+    case MessagePartType.STEP_START:
+      return "part-step-start";
+    case MessagePartType.STEP_FINISH:
+      return "part-step-finish";
+    default:
+      return "part-unknown";
+  }
+}
+
+/** Render a single MessagePart to an HTML element. */
+export function renderMessagePart(part: MessagePart): HTMLElement {
+  const el = document.createElement("span");
+  el.className = `msg-part ${partTypeClass(part.type)}`;
+
+  switch (part.type) {
+    case MessagePartType.TEXT:
+      if (part.text) {
+        el.textContent = part.text;
+      }
+      break;
+
+    case MessagePartType.THINKING:
+      if (part.text) {
+        el.textContent = part.text;
+      }
+      break;
+
+    case MessagePartType.TOOL_CALLING: {
+      const toolName = part.tool_name || "unknown";
+      const header = document.createElement("div");
+      header.className = "tool-header";
+      header.textContent = `⚡ ${toolName}`;
+      el.appendChild(header);
+
+      const details = document.createElement("div");
+      details.className = "tool-details";
+      const status = part.tool_status || "unknown";
+      details.appendChild(createDetailLine(`status=${status}`));
+
+      const state = part.tool_state || {};
+      if (state.input) {
+        details.appendChild(
+          createDetailLine(`input: ${fmtArg(String(state.input))}`)
+        );
+      }
+      if (state.output) {
+        details.appendChild(
+          createDetailLine(`output: ${fmtArg(String(state.output))}`)
+        );
+      }
+      if (state.error) {
+        details.appendChild(
+          createDetailLine(`error: ${fmtArg(String(state.error))}`, "error")
+        );
+      }
+      el.appendChild(details);
+      break;
+    }
+
+    case MessagePartType.TOOL_CALLING_PART:
+      if (part.text) {
+        el.textContent = part.text;
+      }
+      break;
+
+    case MessagePartType.TOOL_RESULT: {
+      const resultText = part.tool_result || part.text || "";
+      if (resultText) {
+        const state = part.tool_state || {};
+        const prefix = state.error ? "✗ " : "✓ ";
+        el.textContent = `${prefix}${resultText}`;
+        if (state.error) {
+          el.classList.add("tool-error");
+        }
+      }
+      break;
+    }
+
+    case MessagePartType.STEP_START:
+      el.textContent = "[STEP START]";
+      break;
+
+    case MessagePartType.STEP_FINISH: {
+      const reason = part.reason || "";
+      el.textContent = `[STEP FINISH] reason=${reason}`;
+      break;
+    }
+
+    default:
+      el.textContent = JSON.stringify(part.raw_data || part);
+      break;
+  }
+
+  return el;
+}
+
+function createDetailLine(text: string, className?: string): HTMLElement {
+  const line = document.createElement("div");
+  line.className = "detail-line" + (className ? ` ${className}` : "");
+  line.textContent = `       ${text}`;
+  return line;
+}
