@@ -4,6 +4,7 @@ import asyncio
 import os
 import time
 import uuid
+import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -250,6 +251,12 @@ class KimiSoul:
 
         # Track rotated compaction export files for cleanup on close
         self._rotated_paths: list[Path] = []
+        self._finalizer = weakref.finalize(
+            self,
+            KimiSoul._sync_cleanup,
+            self._rotated_paths,
+            self._context.file_backend,
+        )
 
     @property
     def name(self) -> str:
@@ -1445,8 +1452,49 @@ class KimiSoul:
         )
         _hook_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
+    @staticmethod
+    def _sync_cleanup(rotated_paths: list[Path], file_backend: Path) -> None:
+        """Best-effort synchronous cleanup of rotated compaction export files.
+
+        This is used as a ``weakref.finalize`` callback so cleanup still runs
+        even when ``KimiSoul`` is part of a reference cycle.
+        """
+        for rotated_path in rotated_paths:
+            try:
+                os.remove(str(rotated_path))
+            except Exception:
+                pass
+        try:
+            os.remove(str(file_backend))
+        except Exception:
+            pass
+
+    async def __aenter__(self) -> KimiSoul:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> None:
+        await self.close()
+
     async def close(self) -> None:
-        """Delete rotated compaction export files and context before process exit."""
+        """Persist state and delete rotated compaction export files/context before process exit."""
+        # Persist any turns indexed since the last explicit save.
+        try:
+            self._history_index.save()
+        except Exception:
+            logger.exception("Failed to save history index")
+
+        # Break the soul <-> context reference cycle so the object can be
+        # reclaimed promptly without waiting for cyclic GC.
+        try:
+            self._context._on_append = None
+        except Exception:
+            pass
+
         for rotated_path in self._rotated_paths:
             try:
                 await asyncio.to_thread(os.remove, str(rotated_path))
@@ -1464,6 +1512,9 @@ class KimiSoul:
             logger.debug("Context file already gone: {path}", path=self._context.file_backend)
         except Exception:
             logger.exception("Failed to remove context file: {path}", path=self._context.file_backend)
+
+        # Cleanup already happened; detach the finalizer so it does not run again.
+        self._finalizer.detach()
 
     @staticmethod
     def _is_retryable_error(exception: BaseException) -> bool:
