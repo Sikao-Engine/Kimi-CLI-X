@@ -563,6 +563,7 @@ def _handle_tool_call(
 ) -> None:
     if isinstance(wire_msg, ToolCall):
         session._tmp_data[_LAST_TOOL_CALL_KEY] = wire_msg
+        session._tmp_data[wire_msg.id] = wire_msg
         name = wire_msg.function.name
         args = wire_msg.function.arguments
         formatted = _format_tool_args(name, args)
@@ -608,13 +609,16 @@ def _handle_tool_result(wire_msg: ToolResult, output_function: Callable[[str, Me
     if result_text:
         prefix = ("✗ " if rv.is_error else "✓ ")
         if display_text:
-            last_tc: ToolCall = _session._tmp_data.get(_LAST_TOOL_CALL_KEY)
-            tool_name = last_tc.function.name if last_tc else "tool"
-            _stream.colorful_print_word(
-                f"{prefix}{tool_name}",
-                fg=Color.BRIGHT_RED if rv.is_error else Color.BRIGHT_GREEN,
-                require_new_line=True,
-            )
+            tc: ToolCall | None = _session._tmp_data.pop(wire_msg.tool_call_id, None)
+            if tc is None:
+                tc = _session._tmp_data.pop(_LAST_TOOL_CALL_KEY, None)
+            if tc:
+                tool_name = tc.function.name if tc else "tool"
+                _stream.colorful_print_word(
+                    f"{prefix}{tool_name}",
+                    fg=Color.BRIGHT_RED if rv.is_error else Color.BRIGHT_GREEN,
+                    require_new_line=True,
+                )
         else:
             _stream.colorful_print_word(
                 f"{prefix}{result_text}",

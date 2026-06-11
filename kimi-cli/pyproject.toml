@@ -12,7 +12,6 @@ dependencies = [
     "kosong-x==0.53.6",
     "ripgrepy>=2.2.0",
     "loguru>=0.6.0",
-    "prompt-toolkit==3.0.52",
     "pillow==12.2.0",
     "pyyaml==6.0.3",
     "rich==14.2.0",
