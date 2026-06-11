@@ -169,6 +169,7 @@ class KimiSoul:
         agent: Agent,
         *,
         context: Context,
+        anonymous: bool = False,
     ):
         """
         Initialize the soul.
@@ -176,9 +177,12 @@ class KimiSoul:
         Args:
             agent (Agent): The agent to run.
             context (Context): The context of the agent.
+            anonymous (bool): Whether the session is anonymous. When True,
+                history files are deleted on close.
         """
         self._agent = agent
         self._runtime = agent.runtime
+        self._anonymous = anonymous
         self._denwa_renji = agent.runtime.denwa_renji
         self._approval = agent.runtime.approval
         self._loop_control = agent.runtime.config.loop_control
@@ -256,6 +260,7 @@ class KimiSoul:
             KimiSoul._sync_cleanup,
             self._rotated_paths,
             self._context.file_backend,
+            self._anonymous,
         )
 
     @property
@@ -1453,12 +1458,16 @@ class KimiSoul:
         _hook_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
     @staticmethod
-    def _sync_cleanup(rotated_paths: list[Path], file_backend: Path) -> None:
+    def _sync_cleanup(rotated_paths: list[Path], file_backend: Path, anonymous: bool) -> None:
         """Best-effort synchronous cleanup of rotated compaction export files.
 
         This is used as a ``weakref.finalize`` callback so cleanup still runs
         even when ``KimiSoul`` is part of a reference cycle.
+
+        Only deletes files when *anonymous* is True (the session is anonymous).
         """
+        if not anonymous:
+            return
         for rotated_path in rotated_paths:
             try:
                 os.remove(str(rotated_path))
@@ -1495,23 +1504,24 @@ class KimiSoul:
         except Exception:
             pass
 
-        for rotated_path in self._rotated_paths:
-            try:
-                await asyncio.to_thread(os.remove, str(rotated_path))
-                logger.debug("Removed rotated compaction export: {path}", path=rotated_path)
-            except FileNotFoundError:
-                logger.debug("Rotated compaction export already gone: {path}", path=rotated_path)
-            except Exception:
-                logger.exception("Failed to remove rotated compaction export: {path}", path=rotated_path)
-        self._rotated_paths.clear()
+        if self._anonymous:
+            for rotated_path in self._rotated_paths:
+                try:
+                    await asyncio.to_thread(os.remove, str(rotated_path))
+                    logger.debug("Removed rotated compaction export: {path}", path=rotated_path)
+                except FileNotFoundError:
+                    logger.debug("Rotated compaction export already gone: {path}", path=rotated_path)
+                except Exception:
+                    logger.exception("Failed to remove rotated compaction export: {path}", path=rotated_path)
+            self._rotated_paths.clear()
 
-        try:
-            await asyncio.to_thread(os.remove, str(self._context.file_backend))
-            logger.debug("Removed context file: {path}", path=self._context.file_backend)
-        except FileNotFoundError:
-            logger.debug("Context file already gone: {path}", path=self._context.file_backend)
-        except Exception:
-            logger.exception("Failed to remove context file: {path}", path=self._context.file_backend)
+            try:
+                await asyncio.to_thread(os.remove, str(self._context.file_backend))
+                logger.debug("Removed context file: {path}", path=self._context.file_backend)
+            except FileNotFoundError:
+                logger.debug("Context file already gone: {path}", path=self._context.file_backend)
+            except Exception:
+                logger.exception("Failed to remove context file: {path}", path=self._context.file_backend)
 
         # Cleanup already happened; detach the finalizer so it does not run again.
         self._finalizer.detach()

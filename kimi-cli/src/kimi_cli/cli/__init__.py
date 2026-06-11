@@ -380,6 +380,7 @@ def kimi(
         """
         # Track if we're resuming an existing session (vs creating new)
         resumed = False
+        anonymous = False
 
         if session_id is not None:
             session = await Session.find(work_dir, session_id)
@@ -406,6 +407,7 @@ def kimi(
             logger.info("Continuing previous session: {session_id}", session_id=session.id)
         else:
             session = await Session.create(work_dir)
+            anonymous = True
             logger.info("Created new session: {session_id}", session_id=session.id)
 
         nonlocal _latest_created_session
@@ -451,6 +453,7 @@ def kimi(
             afk=afk,
             runtime_afk=False,
             resumed=resumed,
+            anonymous=anonymous,
             agent_file=agent_file,
             mcp_configs=mcp_configs,
             skills_dirs=skills_dirs,

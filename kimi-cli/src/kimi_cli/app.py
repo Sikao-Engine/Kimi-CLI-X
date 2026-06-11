@@ -132,6 +132,7 @@ class KimiCLI:
         afk: bool = False,
         runtime_afk: bool = False,
         resumed: bool = False,
+        anonymous: bool = False,
         # Extensions
         agent_file: Path | None = None,
         mcp_configs: list[MCPConfig] | list[dict[str, Any]] | None = None,
@@ -304,7 +305,7 @@ class KimiCLI:
         else:
             await context.write_system_prompt(agent.get_system_prompt())
 
-        soul = KimiSoul(agent, context=context)
+        soul = KimiSoul(agent, context=context, anonymous=anonymous)
 
         # Create and inject hook engine
         from kimi_cli.hooks.engine import HookEngine
