@@ -158,7 +158,14 @@ GRAY_LIGHT = Color256(250)
 TRUE_GRAY = TrueColor(128, 128, 128)
 
 
-_ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_ANSI_ESCAPE = re.compile(
+    r"\x1B(?:"
+    r"\][^\x07\x1B]*(?:\x07|\x1B\\)|"  # OSC sequences (BEL or ST terminated)
+    r"[P^_][^\x07\x1B]*(?:\x07|\x1B\\)|"  # DCS / PM / APC sequences
+    r"[@-Z\\-_]|"              # Single-character Fe sequences
+    r"\[[0-?]*[ -/]*[@-~]"      # CSI sequences
+    r")"
+)
 
 
 def _strip_ansi(text: str) -> str:

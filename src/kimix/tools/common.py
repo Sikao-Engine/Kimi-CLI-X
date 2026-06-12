@@ -59,47 +59,23 @@ def _find_error_line_index(output: str) -> int | None:
     return None
 
 
-# ANSI escape sequences (colored text)
-_ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-
-# Emoji base characters
-_EMOJI_BASE = (
-    "\U0001F1E0-\U0001F1FF"  # flags
-    "\U0001F300-\U0001F5FF"  # symbols & pictographs
-    "\U0001F600-\U0001F64F"  # emoticons
-    "\U0001F680-\U0001F6FF"  # transport & map symbols
-    "\U0001F700-\U0001F77F"  # alchemical symbols
-    "\U0001F780-\U0001F7FF"  # geometric shapes extended
-    "\U0001F800-\U0001F8FF"  # supplemental arrows-c
-    "\U0001F900-\U0001F9FF"  # supplemental symbols and pictographs
-    "\U0001FA00-\U0001FA6F"  # chess symbols
-    "\U0001FA70-\U0001FAFF"  # symbols and pictographs extended-a
-    "\U00002600-\U000026FF"  # misc symbols
-    "\U00002700-\U000027BF"  # dingbats
-    "\U000024C2-\U000024FF"  # enclosed alphanumerics
-    "\U0001F100-\U0001F251"  # enclosed alphanumeric / ideographic supplements
-    "\U0001F3FB-\U0001F3FF"  # skin tone modifiers
+# ANSI escape sequences (colored text, cursor movement, OSC/DCS/PM/APC strings)
+_ANSI_ESCAPE_RE = re.compile(
+    r"\x1B(?:"
+    r"\][^\x07\x1B]*(?:\x07|\x1B\\)|"  # OSC sequences (BEL or ST terminated)
+    r"[P^_][^\x07\x1B]*(?:\x07|\x1B\\)|"  # DCS / PM / APC sequences
+    r"[@-Z\\-_]|"              # Single-character Fe sequences
+    r"\[[0-?]*[ -/]*[@-~]"      # CSI sequences
+    r")"
 )
-
-_EMOJI_RE = re.compile(
-    f"[{_EMOJI_BASE}]"
-    f"(?:"
-    f"  [{_EMOJI_BASE}\U0000FE0F\U000020E3]"
-    f"| \U0000200D [{_EMOJI_BASE}]"
-    f")*",
-    re.VERBOSE | re.UNICODE,
-)
-
-# Keycap sequences (e.g. 1️⃣, #️⃣) – preserve the base digit/symbol
-_KEYCAP_RE = re.compile(r"([0-9#*])\uFE0F?\u20E3")
-
 
 def filter_output(text: str) -> str:
     """Process process pipeline stdout.
 
     Steps:
-        1. Remove ANSI escape sequences (colored text).
-        2. Remove emoji characters and sequences.
+        1. Remove ANSI escape sequences (colored text, cursor movement,
+           OSC/DCS/PM/APC strings).
+        2. Normalize CRLF and lone CR line endings to LF.
 
     Args:
         text: Raw stdout text.
@@ -110,8 +86,7 @@ def filter_output(text: str) -> str:
     if not isinstance(text, str):
         raise TypeError("filter_output expects a string")
     text = _ANSI_ESCAPE_RE.sub("", text)
-    text = _EMOJI_RE.sub("", text)
-    text = _KEYCAP_RE.sub(r"\1", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     return text
 
 
