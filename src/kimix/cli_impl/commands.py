@@ -192,6 +192,11 @@ def _cmd_plan(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     file_path: str | None = None
     if len(task_split) >= 2:
         file_path = ':'.join(task_split[1:]).strip()
+    else:
+        import secrets
+        cache_dir = Path('.kimix_cache')
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        file_path = str(cache_dir / f'{secrets.token_hex(8)}.md')
     print(
         f'\n>>>> Start input requirement for plan, end with {colorful_text("/end", Color.YELLOW)}, '
         f'cancel with {colorful_text("/cancel", Color.YELLOW)}')
@@ -200,7 +205,7 @@ def _cmd_plan(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     if not requirement:
         print_warning('No requirement provided.')
         return None, False
-    prompt_plan(requirement, file_path or 'plan.md')
+    prompt_plan(requirement, file_path)
     return None, False
 
 
