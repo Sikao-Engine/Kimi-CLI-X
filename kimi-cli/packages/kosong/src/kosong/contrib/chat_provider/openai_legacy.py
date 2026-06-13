@@ -294,8 +294,6 @@ class OpenAILegacy:
         dumped_message = message.model_dump(exclude_none=True)
         # reasoning_content only matters for tool-call messages (DeepSeek/Kimi/MiniMax/Qwen
         # require it; the API ignores it in pure chat). Always include it when tool_calls
-        # are present, even if empty. Also include it when a ThinkPart is present so that
-        # empty reasoning content is round-tripped.
         if self._reasoning_key and message.tool_calls and has_reasoning:
             dumped_message[self._reasoning_key] = reasoning_content
         return cast(ChatCompletionMessageParam, dumped_message)
