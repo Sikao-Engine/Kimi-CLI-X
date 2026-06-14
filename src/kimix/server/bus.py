@@ -2,9 +2,12 @@
 """Event bus for broadcasting server-side events (SSE).
 
 All events are broadcast as BusEvent instances with the opencode-style format:
-    {"type": "<event_type>", "properties": {...}}
+    {"id": "<event_id>", "type": "<event_type>", "properties": {...}}
 
-No SSE `event:` field is used — event type is determined by JSON data.type.
+The SSE wire format mirrors opencode exactly: each event is encoded as
+    event: message\\n
+    id: <event_id>\\n
+    data: {"id":...,"type":...,"properties":...}\\n\\n
 """
 
 from __future__ import annotations
@@ -13,10 +16,28 @@ import asyncio
 import orjson
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ── Event ID generator (opencode-style ascending evt_ IDs) ──────────
+
+_id_lock = threading.Lock()
+_id_counter = 0
+
+
+def create_id() -> str:
+    """Generate an opencode-style ascending event ID (``evt_`` prefix)."""
+    global _id_counter
+    with _id_lock:
+        _id_counter += 1
+        counter = _id_counter
+    ts_hex = format(int(time.time() * 1000), "012x")
+    cnt_hex = format(counter, "06x")
+    return f"evt_{ts_hex}{cnt_hex}"
 
 
 @dataclass
@@ -24,17 +45,26 @@ class BusEvent:
     """A structured event to be broadcast via SSE.
 
     Format matches opencode protocol:
-        data: {"type":"<event_type>","properties":{...}}
+        {"id": "evt_...", "type": "<event_type>", "properties": {...}}
     """
 
     type: str
     properties: Dict[str, Any] = field(default_factory=dict)
+    id: str = field(default_factory=create_id)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"type": self.type, "properties": self.properties}
+        return {"id": self.id, "type": self.type, "properties": self.properties}
 
     def to_json(self) -> str:
         return orjson.dumps(self.to_dict()).decode("utf-8")
+
+    def to_sse(self) -> str:
+        """Encode as an opencode-compatible SSE frame.
+
+        opencode uses a named ``message`` event plus an ``id`` line so the
+        client can populate the ``Last-Event-ID`` header on reconnect.
+        """
+        return f"event: message\nid: {self.id}\ndata: {self.to_json()}\n\n"
 
 
 class EventBus:

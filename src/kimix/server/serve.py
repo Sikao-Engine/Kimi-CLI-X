@@ -28,7 +28,7 @@ def serve_cli(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    from kimix.server.dummy_app import create_app
+    from kimix.server.app import create_app
 
     app = create_app()
 

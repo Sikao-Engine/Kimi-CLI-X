@@ -141,7 +141,7 @@ class MessagePart:
 
 @dataclass
 class MessageInfo:
-    """Message metadata."""
+    """Message metadata (opencode MessageV2.Info shape)."""
 
     id: str = ""
     role: str = "assistant"  # user | assistant | system
@@ -161,25 +161,30 @@ class MessageInfo:
             "id": self.id,
             "sessionID": self.sessionID,
             "role": self.role,
+            "time": self.time or {"created": _now_ms()},
         }
-        if self.time:
-            d["time"] = self.time
-        if self.parentID:
+        if self.role == "assistant":
+            # opencode AssistantMessage requires these fields.
             d["parentID"] = self.parentID
-        if self.agent:
-            d["agent"] = self.agent
-        if self.modelID:
             d["modelID"] = self.modelID
-        if self.providerID:
             d["providerID"] = self.providerID
-        if self.mode:
-            d["mode"] = self.mode
-        if self.path:
-            d["path"] = self.path
-        if self.cost:
+            d["mode"] = self.mode or "chat"
+            d["agent"] = self.agent
+            d["path"] = self.path or {"cwd": "", "root": ""}
             d["cost"] = self.cost
-        if self.tokens:
-            d["tokens"] = self.tokens
+            d["tokens"] = self.tokens or {
+                "input": 0,
+                "output": 0,
+                "reasoning": 0,
+                "cache": {"read": 0, "write": 0},
+            }
+        else:
+            d["agent"] = self.agent
+            if self.modelID or self.providerID:
+                d["model"] = {
+                    "providerID": self.providerID,
+                    "modelID": self.modelID,
+                }
         return d
 
 
@@ -197,31 +202,42 @@ class MessageWithParts:
 
 @dataclass
 class SessionInfo:
-    """Public session info exposed via API."""
+    """Public session info exposed via API (opencode Session.Info shape)."""
 
     id: str = ""
-    title: Optional[str] = None
-    createdAt: float = 0.0
-    updatedAt: float = 0.0
+    title: str = ""
+    projectID: str = "kimix"
+    directory: str = ""
+    version: str = "0.1.0"
+    createdAt: int = 0  # unix ms
+    updatedAt: int = 0  # unix ms
     parentID: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "id": self.id,
+            "projectID": self.projectID,
+            "directory": self.directory,
             "title": self.title,
-            "createdAt": self.createdAt,
-            "updatedAt": self.updatedAt,
-            "parentID": self.parentID,
+            "version": self.version,
+            "time": {
+                "created": self.createdAt,
+                "updated": self.updatedAt,
+            },
         }
+        if self.parentID:
+            d["parentID"] = self.parentID
+        return d
 
 
 @dataclass
 class SessionStatus:
-    type: str = "idle"  # idle | busy | error
+    type: str = "idle"  # idle | busy | retry
     time: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"type": self.type, "time": self.time}
+        # opencode SessionStatus.Info carries only `type` for idle/busy.
+        return {"type": self.type}
 
 
 # ── Managed Session Entry ────────────────────────────────────────
@@ -251,14 +267,21 @@ class SessionManager:
 
     # ── Session CRUD ─────────────────────────────────────────────
 
-    async def create_session(self, title: Optional[str] = None) -> SessionInfo:
+    async def create_session(
+        self,
+        title: Optional[str] = None,
+        parent_id: Optional[str] = None,
+        agent: Optional[str] = None,
+    ) -> SessionInfo:
         session_id = _gen_session_id()
-        now = time.time()
+        now = _now_ms()
         info = SessionInfo(
             id=session_id,
             title=title or f"Session {session_id[:12]}",
+            directory=os.getcwd(),
             createdAt=now,
             updatedAt=now,
+            parentID=parent_id,
         )
         sdk_session = await _create_session_async(session_id=session_id)
         entry = ManagedSession(info=info, sdk_session=sdk_session)
@@ -266,7 +289,7 @@ class SessionManager:
             self._sessions[session_id] = entry
 
         bus.emit_type(
-            "session.created", sessionID=session_id, info=info.to_dict()
+            "session.created", info=info.to_dict()
         )
         logger.info("[SessionManager] Created session %s", session_id)
         return info
@@ -298,16 +321,40 @@ class SessionManager:
                 await close_session_async(entry.sdk_session)
             except Exception:
                 logger.debug("Error closing sdk session", exc_info=True)
-        bus.emit_type("session.deleted", sessionID=session_id)
+        bus.emit_type("session.deleted", info=entry.info.to_dict())
         logger.info("[SessionManager] Deleted session %s", session_id)
         return True
 
     def get_session_status(self) -> Dict[str, Dict[str, Any]]:
+        # opencode only tracks non-idle sessions in the status map.
         with self._lock:
             return {
                 sid: entry.status.to_dict()
                 for sid, entry in self._sessions.items()
+                if entry.status.type != "idle"
             }
+
+    def get_todos(self, session_id: str) -> List[Dict[str, Any]]:
+        entry = self._get_entry(session_id)
+        sdk_session = entry.sdk_session
+        if sdk_session is None:
+            return []
+        try:
+            cli = getattr(sdk_session, "_cli", None)
+            if cli is not None and cli.session is not None:
+                todos = load_session_state(cli.session.dir).todos
+                return [
+                    {
+                        "id": getattr(t, "id", str(i)),
+                        "content": getattr(t, "content", ""),
+                        "status": getattr(t, "status", "pending"),
+                        "priority": getattr(t, "priority", "medium"),
+                    }
+                    for i, t in enumerate(todos)
+                ]
+        except Exception:
+            logger.debug("Error loading todos", exc_info=True)
+        return []
 
     # ── Messages ─────────────────────────────────────────────────
 
@@ -320,7 +367,99 @@ class SessionManager:
             msgs = msgs[-limit:]
         return [m.to_dict() for m in msgs]
 
+    # ── Bootstrap / instance metadata ────────────────────────────
+
+    def _model_ref(self) -> Dict[str, str]:
+        """Resolve the configured (providerID, modelID) pair."""
+        try:
+            from kimix.utils.config import _create_config
+
+            cfg, provider_dict = _create_config(None)
+            provider_id = "kimix"
+            model_id = getattr(cfg, "default_model", "") or ""
+            if provider_dict:
+                provider_id = provider_dict.get("name") or provider_id
+                model_id = provider_dict.get("model_name") or model_id
+            return {"providerID": provider_id, "modelID": model_id}
+        except Exception:
+            logger.debug("Error resolving model ref", exc_info=True)
+            return {"providerID": "kimix", "modelID": "unknown"}
+
+    def get_config(self) -> Dict[str, Any]:
+        """Return an opencode-compatible Config object."""
+        ref = self._model_ref()
+        return {
+            "$schema": "https://opencode.ai/config.json",
+            "model": f"{ref['providerID']}/{ref['modelID']}",
+            "username": os.environ.get("USER") or os.environ.get("USERNAME") or "user",
+        }
+
+    def get_providers(self) -> Dict[str, Any]:
+        """Return opencode ConfigProvidersResponse: {providers, default}."""
+        ref = self._model_ref()
+        provider = {
+            "id": ref["providerID"],
+            "name": ref["providerID"],
+            "env": [],
+            "models": {
+                ref["modelID"]: {
+                    "id": ref["modelID"],
+                    "name": ref["modelID"],
+                    "release_date": "",
+                    "attachment": False,
+                    "reasoning": True,
+                    "temperature": True,
+                    "tool_call": True,
+                    "cost": {"input": 0, "output": 0},
+                    "limit": {"context": 0, "output": 0},
+                    "options": {},
+                }
+            },
+        }
+        return {
+            "providers": [provider],
+            "default": {ref["providerID"]: ref["modelID"]},
+        }
+
+    def get_project(self) -> Dict[str, Any]:
+        """Return opencode Project.Info for the current working directory."""
+        cwd = os.getcwd()
+        return {
+            "id": "kimix",
+            "worktree": cwd,
+            "vcs": "git" if os.path.isdir(os.path.join(cwd, ".git")) else None,
+            "time": {"created": _now_ms(), "initialized": _now_ms()},
+        }
+
+    def get_path(self) -> Dict[str, Any]:
+        """Return opencode PathInfo: {home, state, config, worktree, directory}."""
+        cwd = os.getcwd()
+        home = os.path.expanduser("~")
+        return {
+            "home": home,
+            "state": os.path.join(home, ".kimi"),
+            "config": os.path.join(home, ".kimi"),
+            "worktree": cwd,
+            "directory": cwd,
+        }
+
+    def list_agents(self) -> List[Dict[str, Any]]:
+        """Return the list of available agents in opencode Agent shape."""
+        ref = self._model_ref()
+        return [
+            {
+                "name": "chat",
+                "description": "Default kimix agent",
+                "mode": "primary",
+                "builtIn": True,
+                "model": ref,
+                "tools": {},
+                "options": {},
+            }
+        ]
+
     # ── Prompt (sync wait) ───────────────────────────────────────
+
 
     async def prompt(
         self,
@@ -380,19 +519,25 @@ class SessionManager:
         )
         entry.messages.append(user_msg)
         bus.emit_type(
-            "message.created",
-            sessionID=session_id,
+            "message.updated",
             info=user_msg.info.to_dict(),
         )
 
         # ── Create assistant message placeholder ─────────────────
         asst_msg_id = _gen_message_id()
+        _ref = self._model_ref()
+        _cwd = os.getcwd()
         asst_msg = MessageWithParts(
             info=MessageInfo(
                 id=asst_msg_id,
                 role="assistant",
                 sessionID=session_id,
                 agent=agent or "",
+                parentID=user_msg_id,
+                modelID=_ref["modelID"],
+                providerID=_ref["providerID"],
+                mode="chat",
+                path={"cwd": _cwd, "root": _cwd},
                 time={"created": _now_ms()},
             ),
             parts=[],
@@ -536,10 +681,9 @@ class SessionManager:
                         )
                     )
                     asst_msg.info.time["completed"] = _now_ms()
-                    entry.info.updatedAt = time.time()
+                    entry.info.updatedAt = _now_ms()
                     bus.emit_type(
                         "message.updated",
-                        sessionID=session_id,
                         info=asst_msg.info.to_dict(),
                     )
                     return asst_msg.to_dict()
@@ -547,10 +691,9 @@ class SessionManager:
                     text = new_text.strip()
                 else:
                     asst_msg.info.time["completed"] = _now_ms()
-                    entry.info.updatedAt = time.time()
+                    entry.info.updatedAt = _now_ms()
                     bus.emit_type(
                         "message.updated",
-                        sessionID=session_id,
                         info=asst_msg.info.to_dict(),
                     )
                     return asst_msg.to_dict()
@@ -592,13 +735,12 @@ class SessionManager:
                         asst_msg.info.time["completed"] = _now_ms()
                         bus.emit_type(
                             "message.updated",
-                            sessionID=session_id,
                             info=asst_msg.info.to_dict(),
                         )
                         bus.emit_type(
                             "session.status",
                             sessionID=session_id,
-                            status={"type": "busy", "time": time.time()},
+                            status={"type": "busy"},
                         )
 
                         # New step
@@ -833,12 +975,11 @@ class SessionManager:
 
         # ── Finalize ─────────────────────────────────────────────
         asst_msg.info.time["completed"] = _now_ms()
-        entry.info.updatedAt = time.time()
+        entry.info.updatedAt = _now_ms()
         entry._cancel_event = None
 
         bus.emit_type(
             "message.updated",
-            sessionID=session_id,
             info=asst_msg.info.to_dict(),
         )
 
@@ -983,6 +1124,8 @@ class SessionManager:
             sessionID=entry.info.id,
             status=entry.status.to_dict(),
         )
+        if status_type == "idle":
+            bus.emit_type("session.idle", sessionID=entry.info.id)
 
 
 # Global singleton
