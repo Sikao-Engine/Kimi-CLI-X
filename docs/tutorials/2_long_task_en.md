@@ -2,20 +2,20 @@
 
 Kimix provides two main approaches for complex or time-consuming tasks:
 
-1. **`/plan`**: Sequential step-by-step execution with resume support
+1. **`/plan`**: Lets a dedicated Planner Agent generate a reviewable task plan, then a Worker Agent serially implements and reviews it after confirmation
 2. **`/swarm`**: DAG-based parallel scheduling with multiple sub-agents
 
 ---
 
 ## `/plan`
 
-Two-phase mode: plan generation + step execution. Best for sequential, resumable tasks.
+Flow: **plan generation → user review → execution → review**. Best for tasks that need explicit steps and user confirmation before execution.
 
 ### Basic Usage
 
 ```
 /plan
->>>> Make a task-list: input multiple-lines, end with /end, cancel with /cancel
+>>>> Start input requirement for plan, end with /end, cancel with /cancel
 Add complete error handling to this project:
 1. Add parameter validation to all functions
 2. Unify exception types and error codes
@@ -23,41 +23,52 @@ Add complete error handling to this project:
 /end
 ```
 
-### Execution Flow
+### Execution Flow (`prompt_plan_async`)
 
-**Phase 1: Plan Generation**
-1. Creates a dedicated session with `TodoMaker` system prompt
-2. LLM breaks task into steps, writes to `~/.kimi/plan/plan_<uuid>.md` (up to 4 retries)
-3. Plan metadata cached in `~/.kimi/plan/.cache.json` with SHA256 validation
+See `src/kimix/utils/prompt.py` and `src/kimix/cli_impl/commands.py`.
 
-**Phase 2: Step Execution**
-1. Clears context via `clear_default_context()`
-2. Resumes from checkpoint if cached and incomplete
-3. Executes steps sequentially; calls `SetTodoList` after each step
-4. Updates `finished_step_count` in cache
-5. Deletes cache on completion
+#### Phase 1: Plan Generation
 
-### Load from File
+1. **Create Planner session**: Using `agent_planner.json` config and the `TodoMaker` system prompt.
+2. **Specify plan file**: If no file path is provided, a `plan_<uuid>.md` is auto-generated under `.kimix_cache/` in the current directory; if the specified file already exists, it is deleted first.
+3. **Generate plan**: The Planner reads the requirement, breaks the task into steps, and writes the plan file via the `WritePlan` tool. Generation retries up to **3 times** to ensure the plan is written correctly.
+4. **Open for review**: After generation, the file is opened with the system default application for review.
+
+#### Phase 2: Review & Revision
+
+After the plan is generated, a review loop begins:
+
+- Prompt: `Do you want to implement the plan? (y/n)`
+  - Input `y`: enter the execution phase.
+  - Input `n` or anything else: enter the revision flow.
+- Revision prompt: `Please describe the changes you want (/quit to give up):`
+  - Input `/quit`: abandon execution.
+  - Input specific feedback: the Planner updates the plan file using the `WritePlan` or `EditPlan` tools based on the feedback, then reopens it for review. The loop repeats until confirmed or abandoned.
+
+#### Phase 3: Execution & Review
+
+1. **Close Planner session**: After user confirmation, the Planner session is closed.
+2. **Create Worker session**: A regular session is created with the default Worker Agent.
+3. **Send implementation prompt**:
+   - If the plan file is smaller than **100 KB**, the plan content is embedded directly in the prompt;
+   - If the plan file is larger than **100 KB**, the Agent is prompted to read and execute the plan file.
+4. **Append review prompt**: After implementation, an additional review prompt is sent asking the Agent to check whether the plan was fully completed.
+
+### Specifying the Plan Output File
+
+Use `/plan:<file>` to specify the plan output path. Note: this is the **plan output file**; the task requirement is still provided via multi-line input:
 
 ```
-/plan:path/to/task_description.md
+/plan:docs/plan.md
+>>>> Start input requirement for plan, end with /end, cancel with /cancel
+Add complete error handling to this project:
+1. Add parameter validation to all functions
+2. Unify exception types and error codes
+3. Add logging
+/end
 ```
 
-> No cache check or confirmation prompt in file mode.
-
-### Cache & Resume
-
-Interactive `/plan` checks cache first:
-- `y`: resume from last completed step
-- `n`: generate new plan, overwrite cache
-
-Resume requires: plan file exists with matching SHA256, and `0 < finished < total`.
-
-### Execution Confirmation
-
-After plan generation, optional confirmation prompt:
-- `y`: print remaining steps and confirm once before execution
-- `n`: auto-execute all steps
+If the specified plan file already exists, it will be overwritten.
 
 ---
 
@@ -76,6 +87,12 @@ Prompts exceeding **65536 chars** are exported to a temp file and replaced with 
 | `429` | Wait `min(2^attempt, 60)`s, retry |
 | `400`, `500`, `502`, `503` | Exponential backoff, retry |
 | Other | Wait 1s, retry; throw on last attempt |
+
+---
+
+### TODO Reminder
+
+After each main prompt execution, the system checks whether there are unfinished `todos` in the current session. If so, a `<system-reminder>` is automatically appended reminding the Agent to complete all pending / in_progress todos before finishing. This works with the `SetTodoList` tool to ensure intermediate steps are not missed in long tasks.
 
 ---
 
@@ -159,11 +176,11 @@ Replace print-based logging with standard logging in utils.py, core.py, and cli.
 |---------|---------|----------|
 | Execution | Serial | Parallel (DAG) |
 | Task split | Linear steps | Directed acyclic graph |
-| Resume | Yes | No |
+| Resume | No (current implementation completes generation, review, execution, and review in one flow) | No |
 | Progress | Step visualization | DAG node status |
 | Use case | Ordered, dependent tasks | Parallel, independent tasks |
 | Overhead | Lower (single session) | Higher (multi-agent) |
 | Examples | Feature implementation | Batch review, multi-module analysis |
 
-**Choose `/plan`** when steps have clear order and must complete sequentially, or resumability is needed.
+**Choose `/plan`** when the task needs explicit steps, user review, and confirmation before execution, suitable for one-shot long tasks.
 **Choose `/swarm`** when subtasks are independent and can benefit from parallel execution.

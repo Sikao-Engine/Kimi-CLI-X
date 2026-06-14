@@ -78,7 +78,7 @@ $env:KIMI_API_KEY="your-api-key"
 | Subcommand | Description | Common Options |
 |------------|-------------|----------------|
 | `serve` | Start HTTP server (OpenCode style) | `--host` (default `127.0.0.1`), `--port` (default `4096`) |
-| `ssecli` | SSE CLI debugger for `kimix serve` | `--host`, `--port`, `--debug` (saves raw SSE events to `sse_log_<timestamp>.txt`) |
+| `ssecli` | SSE CLI debugger for `kimix serve`. Supports `/new`, `/abort`, `/status`, `/sessions`, `/messages`, `/clear`, `/compact[:N]`, `/export[:path]`, `/help`; press `Ctrl+C` or send EOF (`Ctrl+D` / `Ctrl+Z`) to exit | `--host`, `--port`, `--debug` (saves raw event log as `sse_log_<YYYYMMDD_HHMMSS>.txt`) |
 
 **Examples:**
 ```bash
@@ -135,17 +135,18 @@ uv run kimix --config <path>
 | `--no_color` | Disable colored output |
 | `--manually-cot` | Enable manual CoT (may use multiple sessions) |
 | `--ralph` | Enable Ralph mode (optional iteration count) |
-| `--supervisor` | Use Supervisor role instead of default Worker |
 | `-s`, `--skill-dir` | Custom skill directory (repeatable) |
 | `--config` | JSON config path. Searches: cwd parents, package parents, `PATH` |
+
+> **Auto-loading skill directories**: On startup, Kimix also reads `.kimix/skill.json` in the current directory. If it contains a `skill_dir` field (string or array of strings) and the directories exist, they are automatically appended to the default skill search paths.
 
 ### Interactive Commands
 
 | Command | Description |
 |---------|-------------|
-| `<path>` | Load file. Non-`.py` parsed as multi-line prompt; `.py` executed directly |
+| `<path>` | Load file. `.py` files are executed directly (`__file__` points to the file); other files are read entirely as a single prompt |
 | `/file:<path>` | Read entire file as a single prompt |
-| `/todo:<path>` | Scan code file for TODO comments and prompt agent to implement each one |
+| `/todo:<path>` | Scan code files for TODO comments and prompt the agent to implement them. Supports `.py`, C/C++ family (`.c/.cpp/.h/.java/.js/.ts/.go/.rs`, etc.), Shell (`.sh/.bash/.zsh`), HTML/XML, Pascal, Lisp, SQL, and more |
 | `/clear` | Clear current context |
 | `/summarize` | Summarize context to memory |
 | `/exit` | Exit |
@@ -154,15 +155,15 @@ uv run kimix --config <path>
 | `/fix:<command>` | Run command, auto-retry on error |
 | `/txt` | Multi-line text mode (end with `/end`, cancel with `/cancel`) |
 | `/init` | Interactive LLM config initialization (resets session) |
-| `/compact` | Compact conversation context |
-| `/export:<path>` | Export session messages to file |
+| `/compact` | Compact the current session's conversation context |
+| `/export:<path>` | Export the current session's messages to the specified file |
 | `/resume:<id>` | Close current session and resume a session by ID |
 | `/rename:<id>` | Rename the current session to a new ID |
 | `/swarm` | Multi-agent swarm execution (end with `/end`, cancel with `/cancel`) |
 | `/ralph:on/off/<num>` | Set Ralph mode |
-| `/supervisor:on/off` | Toggle Supervisor mode (rebuilds session) |
+| `/supervisor` | Enter multi-line input mode to create a session with the Supervisor role and execute one task (end with `/end`, cancel with `/cancel`) |
 | `/cot:on/off` | Toggle manual CoT mode |
-| `/plan` | Generate task plan with TodoMaker Agent (supports `/plan:<file>`) |
+| `/plan` / `/plan:<file>` | Use the TodoMaker Agent to generate a task plan. Task requirements are provided via multi-line input (end with `/end`); `<file>` specifies the plan output file path, and will be overwritten if it already exists. After generation, you can review and modify the plan, then confirm to execute; a review prompt is appended after execution |
 | `/script` | Write and execute Python script (end with `/end`) |
 | `/cmd:<command>` | Execute system command |
 | `/cd:<path>` | Change working directory (resets skills and clears context) |

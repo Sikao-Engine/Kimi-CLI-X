@@ -25,7 +25,7 @@ Match specificity to task fragility:
 ```
 skill-name/
 ├── SKILL.md (required)
-│   ├── YAML frontmatter: name, description
+│   ├── YAML frontmatter: name, description, optional type
 │   └── Markdown instructions
 └── Bundled Resources (optional)
     ├── scripts/      - Executable code
@@ -33,7 +33,7 @@ skill-name/
     └── assets/       - Templates, images, fonts
 ```
 
-**SKILL.md frontmatter**: `name` and `description` are the only fields Kimi reads to determine when to use the skill. Description must include what the skill does AND when to use it.
+**SKILL.md frontmatter**: `name` and `description` are required. `type` is optional (`standard` or `flow`). Description must include what the skill does AND when to use it.
 
 **SKILL.md body**: Instructions loaded only after skill triggers. Keep under 500 lines.
 
@@ -60,9 +60,32 @@ Keep SKILL.md lean; move detailed info to references. Link reference files from 
 
 ## Locations
 
-- User: `~/.config/agents/skills/`, `~/.kimi/skills/`, `~/.claude/skills/`
-- Project: `.agents/skills/`
-- `--skills-dir` overrides discovery
+Skills are discovered from the following locations, in priority order (most specific wins):
+
+1. `--skills-dir` (overrides default discovery)
+2. Project: `.kimi/skills`, `.claude/skills`, `.codex/skills`, `.agents/skills`
+3. User: `~/.config/agents/skills`, `~/.agents/skills`, `~/.kimi/skills`, `~/.claude/skills`, `~/.codex/skills`
+4. Built-in: bundled with kimi-cli
+
+Within each layer, brand-specific directories (`.kimi`, `.claude`, `.codex`) take priority over generic ones (`.agents`, `.config/agents`). Use `--skills-dir` to test skills without placing them in the standard paths.
+
+## Supported Forms
+
+### Subdirectory form (canonical)
+
+```
+<skills-root>/<skill-name>/SKILL.md
+```
+
+Use this for skills with bundled resources.
+
+### Flat form
+
+```
+<skills-root>/<skill-name>.md
+```
+
+Use this for single-file skills with no extra resources. The file stem is used as the skill name when `name` is omitted from frontmatter.
 
 ## Creation Process
 
@@ -70,7 +93,7 @@ Keep SKILL.md lean; move detailed info to references. Link reference files from 
 2. **Plan**: Identify reusable resources (scripts, references, assets)
 3. **Initialize**: Create directory with SKILL.md and resource folders
 4. **Edit**: Implement resources and write SKILL.md
-5. **Package**: Create `<skill-name>.skill` zip archive
+5. **Validate**: Check frontmatter, naming, structure, and discovery
 6. **Iterate**: Improve based on real usage
 
 ### Naming
@@ -90,6 +113,15 @@ description: What it does. Use when: (1) condition A, (2) condition B...
 ---
 ```
 
+For a flow skill, add `type: flow` and include a `mermaid` or `d2` fenced code block:
+```yaml
+---
+name: approval-flow
+description: Route requests through an approval flow. Use when: user asks for gated workflows.
+type: flow
+---
+```
+
 **Body**: Use imperative form. Include:
 - Multi-step workflows with decision points
 - Output formats and quality standards
@@ -97,13 +129,19 @@ description: What it does. Use when: (1) condition A, (2) condition B...
 
 ### Testing
 
-Test all scripts before packaging. For many similar scripts, test a representative sample.
-
-### Packaging
+Test all scripts before use. For many similar scripts, test a representative sample. Verify the skill is discoverable by running:
 
 ```bash
-cd <skills-root>
-zip -r my-skill.skill my-skill
+kimi --skills-dir <path-to-parent-skills-root>
 ```
 
-Validate before packaging: frontmatter format, required fields, naming conventions, file organization.
+### Validation
+
+Before considering a skill complete, verify:
+- [ ] Frontmatter starts with `---` and ends with `---`
+- [ ] `name` matches the directory or file stem
+- [ ] `description` is present and describes what + when
+- [ ] `type` is either `standard` or `flow` (omit for standard)
+- [ ] Flow skills contain a valid `mermaid` or `d2` code block
+- [ ] No README.md, CHANGELOG.md, or other auxiliary docs
+- [ ] Resource files are referenced clearly from SKILL.md

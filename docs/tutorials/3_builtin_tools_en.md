@@ -1,8 +1,8 @@
 # Built-in Tools Guide
 
-A coding agent's power comes from efficient interaction with the environment. This guide covers all 14 built-in tools in `agent_worker.json` and how to prompt the agent to use them effectively.
+A coding agent's power comes from efficient interaction with the environment. This guide covers all 17 built-in tools in `agent_worker.json` and how to prompt the agent to use them effectively.
 
-> **Note:** `agent_worker.json` overrides the `tools` field via `extend: default`, so only the 14 tools listed there are available.
+> **Note:** `agent_worker.json` overrides the `tools` field via `extend: default`, so only the 17 tools listed there are available.
 
 ---
 
@@ -11,11 +11,11 @@ A coding agent's power comes from efficient interaction with the environment. Th
 | Category | Tools | Typical Use |
 |----------|-------|-------------|
 | **File & I/O** | `WriteFile`, `ReadFile`, `EditFile`, `Glob`, `Grep` | Create, read, modify, search files |
-| **Code Execution** | `Run`, `Python` | Execute commands or Python code |
+| **Code Execution** | `Run`, `Python`, `Bash`, `Powershell` | Execute executables, bash / powershell commands, or Python code |
 | **Process Management** | `TaskOutput`, `Input` | Interact with background processes |
 | **Search & Info** | `FetchURL`, `Search` | Fetch web content, search local skills |
 | **State & Tracking** | `SetTodoList` | Track progress |
-| **Sub-agent** | `Agent` | Delegate subtasks |
+| **Sub-agent & Session Management** | `Agent`, `AgentList`, `AgentClose` | Create, list, and close sub-agent sessions |
 
 ---
 
@@ -43,7 +43,17 @@ Regex content search (ripgrep-powered). Options: `-i` (case-insensitive), `multi
 #### `Run`
 Execute programs or built-in mapped commands (100+ commands: `cat`, `ls`, `grep`, `find`, `curl`, `git`, etc.). Options: `args`, `cwd`, `output_path`, `timeout` (default 10s, range 3–180s). Exceeds timeout → background task with `task_id`.
 
-> Not a shell interpreter — runs executables directly for safer, more predictable behavior.
+> Not a shell interpreter — runs executables directly or calls internal mapped command implementations for safer, more predictable behavior.
+
+#### `Bash`
+Execute commands or script snippets in a bash shell, supporting shell features such as pipes, redirection, and variable expansion.
+- **Platform**: mainly Linux / macOS.
+- **Use cases**: running shell scripts, combining commands with pipes, complex commands requiring shell interpretation.
+
+#### `Powershell`
+Execute commands or script snippets in PowerShell, supporting Windows-specific commands and pipelines.
+- **Platform**: mainly Windows.
+- **Use cases**: Windows management commands, calling .NET tools, handling cross-platform script compatibility on Windows.
 
 #### `Python`
 Execute Python code in a subprocess. Params: `code` (required), `output_path`, `timeout` (default 10s, range 3–60s). Exceeds timeout → background task. Max 8 concurrent Python processes. Code >30000 chars auto-saved to temp `.py` file.
@@ -80,10 +90,16 @@ Track multi-step task progress. States: `pending`, `in_progress`, `done`. Always
 
 ---
 
-## Sub-agent
+## Sub-agent & Session Management
 
 #### `Agent`
 Spawn an independent sub-agent for a specific subtask. Use for parallel work: code review, translation, module development.
+
+#### `AgentList`
+List all currently active sub-agent sessions. Use after spawning multiple sub-agents to see which are still running or waiting for input.
+
+#### `AgentClose`
+Close a specified sub-agent session and release its resources. Use when a sub-agent task completes or hangs abnormally.
 
 ---
 
@@ -175,7 +191,7 @@ After invoking the command, type your requirement. End input with `/end`, or can
 
 1. **Input requirement** — describe what you want to build or refactor.
 2. **Planner generates plan** — the planner uses the Note tool to save the plan and auto-opens the file for review.
-3. **Confirm implementation** — answer `y` to hand the plan to a worker agent, or `n` to keep the plan for manual execution.
+3. **Confirm implementation** — answer `y` to hand the plan to a worker agent; answer `n` to enter the revision flow and describe changes for the Planner to update the plan; input `/quit` to abandon execution.
 
 #### Why use Plan Mode?
 
