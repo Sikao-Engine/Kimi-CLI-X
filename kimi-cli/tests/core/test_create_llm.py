@@ -7,7 +7,7 @@ from kosong.chat_provider.kimi import Kimi
 from kosong.contrib.chat_provider.openai_responses import OpenAIResponses
 from pydantic import SecretStr
 
-from kimi_cli.config import LLMModel, LLMProvider
+from kimi_cli.config import LLMModel, LLMProvider, OpenAISettings
 from kimi_cli.llm import augment_provider_with_env_vars, create_llm
 
 
@@ -213,6 +213,31 @@ def test_create_llm_openai_legacy_disabled_reasoning_key():
     assert llm is not None
     assert isinstance(llm.chat_provider, OpenAILegacy)
     assert llm.chat_provider._reasoning_key == ""
+
+
+def test_create_llm_openai_legacy_openai_settings():
+    from kosong.contrib.chat_provider.openai_legacy import OpenAILegacy
+
+    provider = LLMProvider(
+        type="openai_legacy",
+        base_url="https://api.openai.com/v1",
+        api_key=SecretStr("test-key"),
+        openai_settings=OpenAISettings(thinking=False, chat_template_kwargs=False),
+    )
+    model = LLMModel(
+        provider="openai",
+        model="gpt-4o",
+        max_context_size=128000,
+    )
+
+    llm = create_llm(provider, model)
+    assert llm is not None
+    assert isinstance(llm.chat_provider, OpenAILegacy)
+    assert llm.chat_provider._openai_settings == {
+        "thinking": False,
+        "reasoning": True,
+        "chat_template_kwargs": False,
+    }
 
 
 def test_create_llm_openai_responses_custom_headers():

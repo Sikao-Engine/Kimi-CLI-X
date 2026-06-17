@@ -1,11 +1,6 @@
 # Long-Running Tasks
 
-Kimix provides two main approaches for complex or time-consuming tasks:
-
-1. **`/plan`**: Lets a dedicated Planner Agent generate a reviewable task plan, then a Worker Agent serially implements and reviews it after confirmation
-2. **`/swarm`**: DAG-based parallel scheduling with multiple sub-agents
-
----
+Kimix provides the **`/plan` command** for complex or time-consuming tasks: it lets a dedicated Planner Agent generate a reviewable task plan, then a Worker Agent serially implements and reviews it after confirmation.
 
 ## `/plan`
 
@@ -115,72 +110,17 @@ class Todo:
 
 ---
 
-## Agent Swarm (`/swarm`)
+## When to Use `/plan`
 
-Coordinator breaks complex tasks into a DAG and schedules sub-agents in parallel.
-
-### Usage
-
-```
-/swarm
->>>> Start input multiple-lines for swarm task, end with /end, cancel with /cancel
-Generate unit tests covering core functions in src/utils.py and src/core.py
-/end
-```
-
-### Execution Flow
-
-1. Collect multi-line text into `task_prompt`
-2. `create_swarm_session(task_prompt)` — coordinator plans DAG nodes via `agent_swarm.json`
-3. `Executor().execute(dag)` schedules nodes by dependencies
-4. Print results; errors included in final output
-
-### Status Messages
-
-| Scenario | Output |
-|----------|--------|
-| DAG created | `Swarm session created, DAG has N node(s).` |
-| Completed | `Swarm execution completed. Results: ...` |
-| Empty input | `Empty task prompt, skipping swarm command.` |
-| Create fail | `Failed to create swarm session: ...` |
-| Execution fail | `Swarm execution failed: ...` |
-| Cancelled | `Swarm command cancelled.` |
-
-### Examples
-
-**Batch code review:**
-```
-/swarm
-Review all Python files in src/ for style, performance, and security issues.
-/end
-```
-
-**Multi-module refactor:**
-```
-/swarm
-Replace print-based logging with standard logging in utils.py, core.py, and cli.py.
-/end
-```
-
-### Notes
-
-1. Swarm tasks involve multiple LLM calls — be patient
-2. File changes are merged via VFS; conflicts resolved by coordinator
-3. Single node failure does not block independent nodes
-
----
-
-## `/plan` vs `/swarm`
-
-| Feature | `/plan` | `/swarm` |
-|---------|---------|----------|
-| Execution | Serial | Parallel (DAG) |
-| Task split | Linear steps | Directed acyclic graph |
-| Resume | No (current implementation completes generation, review, execution, and review in one flow) | No |
-| Progress | Step visualization | DAG node status |
-| Use case | Ordered, dependent tasks | Parallel, independent tasks |
-| Overhead | Lower (single session) | Higher (multi-agent) |
-| Examples | Feature implementation | Batch review, multi-module analysis |
+| Feature | `/plan` |
+|---------|---------|
+| Execution | Serial |
+| Task split | Linear steps |
+| Resume | No (current implementation completes generation, review, execution, and review in one flow) |
+| Progress | Step visualization |
+| Use case | Ordered, dependent tasks |
+| Overhead | Lower (single session) |
+| Examples | Feature implementation, code refactoring |
 
 **Choose `/plan`** when the task needs explicit steps, user review, and confirmation before execution, suitable for one-shot long tasks.
-**Choose `/swarm`** when subtasks are independent and can benefit from parallel execution.
+

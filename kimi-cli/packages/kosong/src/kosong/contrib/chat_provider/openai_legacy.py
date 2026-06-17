@@ -87,6 +87,7 @@ class OpenAILegacy(OpenAICompatibleProviderMixin):
         base_url: str | None = None,
         stream: bool = True,
         reasoning_key: str | None = None,
+        openai_settings: dict[str, Any] | None = None,
         tool_message_conversion: ToolMessageConversion | None = None,
         **client_kwargs: Any,
     ):
@@ -95,6 +96,11 @@ class OpenAILegacy(OpenAICompatibleProviderMixin):
 
         To support OpenAI-compatible APIs that inject reasoning content in a extra field in
         the message, such as `{"reasoning": ...}`, `reasoning_key` can be set to the key name.
+
+        ``openai_settings`` controls which auto-generated keys are included in the provider's
+        ``extra_body`` when ``reasoning_key`` is configured. It should be a dict with boolean
+        flags for ``thinking``, ``reasoning`` and ``chat_template_kwargs``. When omitted, all
+        three keys are included for backward compatibility.
         """
         self._init_openai_client(api_key=api_key, base_url=base_url, client_kwargs=client_kwargs)
         """The underlying `AsyncOpenAI` client."""
@@ -102,6 +108,13 @@ class OpenAILegacy(OpenAICompatibleProviderMixin):
         self.stream = stream
         self._reasoning_effort: ReasoningEffort | Omit = omit
         self._reasoning_key = reasoning_key
+        self._openai_settings: dict[str, Any] = {
+            "thinking": True,
+            "reasoning": True,
+            "chat_template_kwargs": True,
+        }
+        if openai_settings is not None:
+            self._openai_settings.update(openai_settings)
         self._tool_message_conversion: ToolMessageConversion | None = tool_message_conversion
         self._generation_kwargs: OpenAILegacy.GenerationKwargs = {}
 
@@ -145,17 +158,19 @@ class OpenAILegacy(OpenAICompatibleProviderMixin):
         if self._reasoning_key is not None:
             reasoning_enabled = reasoning_effort is not None and reasoning_effort is not omit
             extra_body_level = _reasoning_effort_to_extra_body_level(reasoning_effort)
-            extra_body: dict[str, Any] = {
-                "thinking": {
+            extra_body: dict[str, Any] = {}
+            if self._openai_settings.get("thinking", True):
+                extra_body["thinking"] = {
                     "type": "enabled" if reasoning_enabled else "disabled",
-                },
-                "reasoning": {
+                }
+            if self._openai_settings.get("reasoning", True):
+                extra_body["reasoning"] = {
                     "effort": extra_body_level,
-                },
-                "chat_template_kwargs": {
+                }
+            if self._openai_settings.get("chat_template_kwargs", True):
+                extra_body["chat_template_kwargs"] = {
                     "reasoning_effort": extra_body_level
                 }
-            }
             if existing_extra_body := generation_kwargs.get("extra_body"):
                 merged_extra_body: dict[str, Any] = {**extra_body, **existing_extra_body}
                 for key in ("thinking", "reasoning", "chat_template_kwargs"):
@@ -164,7 +179,8 @@ class OpenAILegacy(OpenAICompatibleProviderMixin):
                     if auto_val is not None and user_val is not None:
                         merged_extra_body[key] = {**auto_val, **user_val}
                 extra_body = merged_extra_body
-            generation_kwargs["extra_body"] = extra_body
+            if extra_body:
+                generation_kwargs["extra_body"] = extra_body
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,

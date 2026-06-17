@@ -303,7 +303,6 @@ At startup, `KimiToolset.load_tools()` (in `kimi-cli/src/kimi_cli/soul/toolset.p
 | `agent_boss.json` | Boss agent with ReadFile/Glob/Grep/FetchURL/Search/Note |
 | `agent_searcher.json` | Fast search agent with Run/Input/TaskOutput/ReadFile/Glob/Grep/FetchURL/WriteFile/EditFile |
 | `agent_subagent.json` | Sub-agent with Run/Input/TaskOutput/Search/SetTodoList/WriteFile/ReadFile/Glob/Grep/EditFile/FetchURL |
-| `agent_swarm.json` | Swarm agent with ReadFile/Glob/Grep/FetchURL/AddNode/Search/AddEdge |
 
 **kimi-cli base agents** (in `kimi-cli/src/kimi_cli/agents/default/`):
 
@@ -332,7 +331,6 @@ agent:
    - `agent_boss.json` — boss/planning agent
    - `agent_searcher.json` — fast search agents
    - `agent_subagent.json` — sub-agents spawned via the `Agent` tool
-   - `agent_swarm.json` — swarm/graph agents
 
 ### YAML Inheritance
 

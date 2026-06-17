@@ -461,3 +461,95 @@ async def test_openai_legacy_no_auto_reasoning_effort_without_reasoning_key():
             pass
         body = json.loads(mock.calls.last.request.content.decode())
         assert "reasoning_effort" not in body
+
+
+async def test_openai_legacy_extra_body_defaults():
+    """When reasoning_key is set, all auto extra_body keys are included by default."""
+    with respx.mock(base_url="https://api.openai.com") as mock:
+        mock.post("/v1/chat/completions").mock(
+            return_value=Response(200, json=make_chat_completion_response())
+        )
+        provider = OpenAILegacy(
+            model="deepseek-reasoner",
+            api_key="test-key",
+            stream=False,
+            reasoning_key="reasoning_content",
+        )
+        stream = await provider.generate("", [], [Message(role="user", content="Hi")])
+        async for _ in stream:
+            pass
+        body = json.loads(mock.calls.last.request.content.decode())
+        assert body["thinking"] == {"type": "disabled"}
+        assert body["reasoning"] == {"effort": "no_think"}
+        assert body["chat_template_kwargs"] == {"reasoning_effort": "no_think"}
+
+
+async def test_openai_legacy_extra_body_disabled():
+    """When all extra_body options are disabled, extra_body is not sent."""
+    with respx.mock(base_url="https://api.openai.com") as mock:
+        mock.post("/v1/chat/completions").mock(
+            return_value=Response(200, json=make_chat_completion_response())
+        )
+        provider = OpenAILegacy(
+            model="deepseek-reasoner",
+            api_key="test-key",
+            stream=False,
+            reasoning_key="reasoning_content",
+            openai_settings={
+                "thinking": False,
+                "reasoning": False,
+                "chat_template_kwargs": False,
+            },
+        )
+        stream = await provider.generate("", [], [Message(role="user", content="Hi")])
+        async for _ in stream:
+            pass
+        body = json.loads(mock.calls.last.request.content.decode())
+        assert "thinking" not in body
+        assert "reasoning" not in body
+        assert "chat_template_kwargs" not in body
+
+
+async def test_openai_legacy_extra_body_partial():
+    """Only enabled extra_body options are included."""
+    with respx.mock(base_url="https://api.openai.com") as mock:
+        mock.post("/v1/chat/completions").mock(
+            return_value=Response(200, json=make_chat_completion_response())
+        )
+        provider = OpenAILegacy(
+            model="deepseek-reasoner",
+            api_key="test-key",
+            stream=False,
+            reasoning_key="reasoning_content",
+            openai_settings={"thinking": False},
+        )
+        stream = await provider.generate("", [], [Message(role="user", content="Hi")])
+        async for _ in stream:
+            pass
+        body = json.loads(mock.calls.last.request.content.decode())
+        assert "thinking" not in body
+        assert body["reasoning"] == {"effort": "no_think"}
+        assert body["chat_template_kwargs"] == {"reasoning_effort": "no_think"}
+
+
+async def test_openai_legacy_extra_body_user_supplied_preserved_when_auto_disabled():
+    """User-supplied extra_body keys are preserved even when the auto-generated key
+    is disabled via openai_settings."""
+    with respx.mock(base_url="https://api.openai.com") as mock:
+        mock.post("/v1/chat/completions").mock(
+            return_value=Response(200, json=make_chat_completion_response())
+        )
+        provider = OpenAILegacy(
+            model="deepseek-reasoner",
+            api_key="test-key",
+            stream=False,
+            reasoning_key="reasoning_content",
+            openai_settings={"thinking": False},
+        ).with_generation_kwargs(extra_body={"thinking": {"keep": "all"}})
+        stream = await provider.generate("", [], [Message(role="user", content="Hi")])
+        async for _ in stream:
+            pass
+        body = json.loads(mock.calls.last.request.content.decode())
+        assert body["thinking"] == {"keep": "all"}
+        assert "reasoning" in body
+        assert "chat_template_kwargs" in body

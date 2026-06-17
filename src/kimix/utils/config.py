@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import orjson
 import kimix.base as base
-from kimi_cli.config import BackgroundConfig, LoopControl, SecretStr, NotificationConfig, MCPConfig, OAuthRef  # type: ignore[attr-defined]
+from kimi_cli.config import BackgroundConfig, LoopControl, SecretStr, NotificationConfig, MCPConfig, OAuthRef, OpenAISettings  # type: ignore[attr-defined]
 from kimi_agent_sdk import Config
 from . import _globals
 
@@ -63,6 +63,10 @@ def _create_config(provider_dict: dict[str, Any] | None = None) -> tuple[Config,
             assert isinstance(oath.key, str), 'oath.key must be str'
         else:
             oath = None
+        openai_settings_dict = provider_dict.get('openai_settings')
+        openai_settings: OpenAISettings | None = None
+        if isinstance(openai_settings_dict, dict):
+            openai_settings = OpenAISettings(**openai_settings_dict)
         provider = LLMProvider(
             type=provider_type,
             # example: "https://api.minimaxi.com/anthropic"
@@ -70,6 +74,7 @@ def _create_config(provider_dict: dict[str, Any] | None = None) -> tuple[Config,
             api_key=SecretStr(api_key),
             custom_headers=provider_dict.get('custom_headers'),
             oauth=oath,
+            openai_settings=openai_settings,
         )
         cfg.default_model = model_name
         cfg.models = {

@@ -173,11 +173,17 @@ def create_llm(
                 if provider.reasoning_key is not None
                 else "reasoning_content"
             )
+            openai_settings = (
+                provider.openai_settings.model_dump()
+                if provider.openai_settings is not None
+                else None
+            )
             chat_provider = OpenAILegacy(
                 model=model.model,
                 base_url=provider.base_url,
                 api_key=resolved_api_key,
                 reasoning_key=reasoning_key,
+                openai_settings=openai_settings,
                 default_headers=dict(provider.custom_headers) if provider.custom_headers else None,
             ).with_parallel_tool_calls(enabled=True)
         case "openai_responses":

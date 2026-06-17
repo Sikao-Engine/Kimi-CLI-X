@@ -33,7 +33,6 @@ from kimix.utils import (
 )
 import kimix.utils._globals as _globals
 from .init import init
-from kimix.dag.agent_swarm import create_swarm_session
 from kimix.dag import Executor
 import asyncio
 
@@ -218,45 +217,6 @@ def _cmd_txt(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     return None, False
 
 
-def _cmd_swarm(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
-    """Execute swarm command: input multiple lines as task prompt, call create_swarm_session,
-    then execute the returned DAG instance."""
-    print(
-        f'\n>>>> Start input multiple-lines for swarm task, end with {colorful_text("/end", Color.YELLOW)}, '
-        f'cancel with {colorful_text("/cancel", Color.YELLOW)}')
-    text, cancelled = _read_multi_line(text_arr)
-    if cancelled:
-        print_warning('Swarm command cancelled.')
-        return None, False
-    task_prompt = '\n'.join(text)
-    if not task_prompt.strip():
-        print_warning('Empty task prompt, skipping swarm command.')
-        return None, False
-
-    print_debug('Creating swarm session...')
-    try:
-        dag = asyncio.run(create_swarm_session(task_prompt))
-    except Exception as e:
-        print_error(f'Failed to create swarm session: {e}')
-        return None, False
-
-    if dag is None:
-        print_warning('Warning: create_swarm_session returned None, skipping execution.')
-        return None, False
-
-    print_debug(f'Swarm session created, DAG has {len(dag)} node(s).')
-
-    print_debug('Executing DAG...')
-    try:
-        executor = Executor()
-        results = executor.execute(dag)
-        print_success(f'Swarm execution completed. Results: {results}')
-    except Exception as e:
-        print_error(f'Swarm execution failed: {e}')
-
-    return None, False
-
-
 def _cmd_file(task_split: list[str], text_arr: list[str]) -> tuple[str | None, bool]:
     if len(task_split) < 2:
         print_error(f'command format error, must be /file:path')
@@ -355,6 +315,7 @@ def _cmd_todo(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
         print_error(f'file not found: {file_path}')
         return None, False
 
+    import re
     from kimix.parser import (
         PythonParser, CParser, ShellParser, HtmlParser, PascalParser, LispParser, SqlParser
     )
@@ -385,7 +346,7 @@ def _cmd_todo(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
         print_error(f'Parse failed: {e}')
         return None, False
 
-    todos = [c for c in result.comments if 'TODO' in c.content.upper()]
+    todos = [c for c in result.comments if re.search(r'(?<![a-zA-Z0-9])TODO(?![a-zA-Z0-9])', c.content.upper())]
     if not todos:
         print_warning('No TODO comments found.')
         return None, False
@@ -440,7 +401,6 @@ _command_map = {
     'export': _cmd_export,
     'resume': _cmd_resume,
     'rename': _cmd_rename,
-    'swarm': _cmd_swarm,
     'ralph': _cmd_ralph,
     'cot': _cmd_cot,
     'supervisor': _cmd_supervisor,

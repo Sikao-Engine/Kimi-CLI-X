@@ -32,6 +32,32 @@ class OAuthRef(BaseModel):
     """Storage key to locate OAuth credentials."""
 
 
+class OpenAISettings(BaseModel):
+    """OpenAI Legacy provider-specific ``extra_body`` options."""
+
+    thinking: bool = Field(
+        default=True,
+        description=(
+            "If true, include the ``thinking`` key in the auto-generated "
+            "``extra_body`` for ``openai_legacy`` providers."
+        ),
+    )
+    reasoning: bool = Field(
+        default=True,
+        description=(
+            "If true, include the ``reasoning`` key in the auto-generated "
+            "``extra_body`` for ``openai_legacy`` providers."
+        ),
+    )
+    chat_template_kwargs: bool = Field(
+        default=True,
+        description=(
+            "If true, include the ``chat_template_kwargs`` key in the auto-generated "
+            "``extra_body`` for ``openai_legacy`` providers."
+        ),
+    )
+
+
 class LLMProvider(BaseModel):
     """LLM provider configuration."""
 
@@ -49,6 +75,9 @@ class LLMProvider(BaseModel):
     """Message field name carrying reasoning content for OpenAI-compatible APIs.
     Applies to provider type ``openai_legacy``. Defaults to ``reasoning_content``
     when unset. Use an empty string to disable reasoning round-tripping."""
+    openai_settings: OpenAISettings | None = None
+    """OpenAI Legacy-specific ``extra_body`` options. Only used when the provider
+    type is ``openai_legacy``."""
     oauth: OAuthRef | None = None
     """OAuth credential reference (do not store tokens here)."""
 

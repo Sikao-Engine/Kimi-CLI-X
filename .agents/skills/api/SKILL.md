@@ -206,7 +206,6 @@ from kimix.utils.system_prompt import SystemPromptType, SystemPromptCallback, ge
 SystemPromptType.Worker           # Standard coding agent (terse, direct output)
 SystemPromptType.TodoMaker        # Plan maker agent (creates implementation plans)
 SystemPromptType.Thinker          # Thinker agent (thinks in <thinking> tags, self-verifies)
-SystemPromptType.SwarmCoordinator # Swarm coordinator (builds dependency DAG)
 SystemPromptType.SkillSearcher    # Skill searcher (read-only, searches skills)
 SystemPromptType.TrivialSubAgent  # Read-only sub-agent (rejects write/edit tasks)
 SystemPromptType.Supervisor       # Supervisor agent (outlines, decomposes, dispatches, tracks, verifies)
@@ -919,7 +918,6 @@ All tools are `CallableTool2` subclasses. Key ones:
 - `FetchURL` — fetch web page as Markdown; params: `url`, `output_path`
 - `fetch_to_markdown(url, wait_until="networkidle")` — Playwright-based fetcher
 - `Zip` / `Unzip` — 7z archive tools; params: `source`, `destination`, `password`
-- `AddNode` / `AddEdge` — swarm DAG planning tools
 
 ## `kimix.cot` — Chain-of-Thought
 
