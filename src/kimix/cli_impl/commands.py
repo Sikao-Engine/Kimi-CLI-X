@@ -33,7 +33,6 @@ from kimix.utils import (
 )
 import kimix.utils._globals as _globals
 from .init import init
-from kimix.dag.agent_swarm import create_swarm_session
 from kimix.dag import Executor
 import asyncio
 
@@ -215,45 +214,6 @@ def _cmd_txt(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     text, _ = _read_multi_line(text_arr)
     for i in _split_text(text, _command_map_keys):
         text_arr.append(i)
-    return None, False
-
-
-def _cmd_swarm(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
-    """Execute swarm command: input multiple lines as task prompt, call create_swarm_session,
-    then execute the returned DAG instance."""
-    print(
-        f'\n>>>> Start input multiple-lines for swarm task, end with {colorful_text("/end", Color.YELLOW)}, '
-        f'cancel with {colorful_text("/cancel", Color.YELLOW)}')
-    text, cancelled = _read_multi_line(text_arr)
-    if cancelled:
-        print_warning('Swarm command cancelled.')
-        return None, False
-    task_prompt = '\n'.join(text)
-    if not task_prompt.strip():
-        print_warning('Empty task prompt, skipping swarm command.')
-        return None, False
-
-    print_debug('Creating swarm session...')
-    try:
-        dag = asyncio.run(create_swarm_session(task_prompt))
-    except Exception as e:
-        print_error(f'Failed to create swarm session: {e}')
-        return None, False
-
-    if dag is None:
-        print_warning('Warning: create_swarm_session returned None, skipping execution.')
-        return None, False
-
-    print_debug(f'Swarm session created, DAG has {len(dag)} node(s).')
-
-    print_debug('Executing DAG...')
-    try:
-        executor = Executor()
-        results = executor.execute(dag)
-        print_success(f'Swarm execution completed. Results: {results}')
-    except Exception as e:
-        print_error(f'Swarm execution failed: {e}')
-
     return None, False
 
 
@@ -440,7 +400,6 @@ _command_map = {
     'export': _cmd_export,
     'resume': _cmd_resume,
     'rename': _cmd_rename,
-    'swarm': _cmd_swarm,
     'ralph': _cmd_ralph,
     'cot': _cmd_cot,
     'supervisor': _cmd_supervisor,

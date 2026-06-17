@@ -225,7 +225,7 @@ async def _summarize_long_output_async(session: Session, command: str, output: s
         sub_session = await _create_session_async(
             session_id=sub_session_id,
             agent_file=base._default_agent_file_dir / "agent_useless.json",
-            agent_type=SystemPromptType.TrivialSubAgent,
+            agent_type=SystemPromptType.Reader,
             provider_dict=default_sub_provider,
             chat_provider=chat_provider,
             resume=False,

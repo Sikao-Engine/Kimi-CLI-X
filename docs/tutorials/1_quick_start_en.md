@@ -159,7 +159,6 @@ uv run kimix --config <path>
 | `/export:<path>` | Export the current session's messages to the specified file |
 | `/resume:<id>` | Close current session and resume a session by ID |
 | `/rename:<id>` | Rename the current session to a new ID |
-| `/swarm` | Multi-agent swarm execution (end with `/end`, cancel with `/cancel`) |
 | `/ralph:on/off/<num>` | Set Ralph mode |
 | `/supervisor` | Enter multi-line input mode to create a session with the Supervisor role and execute one task (end with `/end`, cancel with `/cancel`) |
 | `/cot:on/off` | Toggle manual CoT mode |

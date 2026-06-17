@@ -20,10 +20,10 @@ class SystemPromptType(Enum):
     Worker = 0
     TodoMaker = 1
     Thinker = 2
-    SwarmCoordinator = 3
-    SkillSearcher = 4,
-    TrivialSubAgent = 5
-    Supervisor = 6
+    SkillSearcher = 3
+    TrivialSubAgent = 4
+    Supervisor = 5
+    Reader = 6
 
 
 class SystemPromptCallback:
@@ -85,16 +85,6 @@ def get_system_prompt(
                 role_doc = 'You are a planner'
                 items.append('Plan only. Do not implement.')
                 items.append('Record comprehensive plan with `WritePlan`.')
-            case SystemPromptType.SwarmCoordinator:
-                use_agent_md = True
-                use_skills = True
-                role_doc = 'You are a swarm coordinator'
-                items.append('Build DAG with `AddNode` and `AddEdge`.')
-                items.append('AddNode: clear, actionable sub-task prompt')
-                items.append('AddEdge: upstream → downstream')
-                items.append(
-                    'Keep acyclic. Minimize edges, maximize parallelism.')
-                items.append('Report nodes and edges.')
             case SystemPromptType.Thinker:
                 worker_logic('thinker')
                 items.append(
@@ -106,6 +96,11 @@ def get_system_prompt(
             case SystemPromptType.TrivialSubAgent:
                 worker_logic('persistent autonomous sub-agent', True)
                 items.append('If you need clarification from the parent agent, call the `ask_parent` tool with your question, then stop.')
+            case SystemPromptType.Reader:
+                role_doc = 'You are a reader'
+                items.append('Read the given content and report a concise summary: key results, errors, warnings, and next steps.')
+                items.append('No commands, edits, or questions.')
+                items.append('For large content, cover the most relevant parts and note omissions.')
             case SystemPromptType.Supervisor:
                 use_agent_md = True
                 use_skills = True
