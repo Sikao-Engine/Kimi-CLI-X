@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, NamedTuple, Protocol, runtime_checkable
 
 import kosong
@@ -14,6 +16,47 @@ from kimi_cli.soul.message import system
 from kimi_cli.utils.logging import logger
 from kimi_cli.utils.tokens import count_message_tokens
 from kimi_cli.wire.types import ContentPart, TextPart, ThinkPart
+
+
+class CompactMode(str, Enum):
+    """High-level compaction style presets."""
+
+    BALANCED = "balanced"
+    AGGRESSIVE = "aggressive"
+    RETENTIVE = "retentive"
+    TECHNICAL = "technical"
+
+
+_MODE_GUIDANCE: dict[CompactMode, str] = {
+    CompactMode.BALANCED: (
+        "**Compaction Style Guidance:** Be balanced. Preserve essential context "
+        "while condensing redundant information. Keep current task state, errors "
+        "and solutions, code state, design decisions, and TODO items."
+    ),
+    CompactMode.AGGRESSIVE: (
+        "**Compaction Style Guidance:** Be aggressive. Prioritize brevity, drop "
+        "intermediate attempts, exploratory dead-ends, and low-priority details. "
+        "Keep only the essential facts, decisions, and current state."
+    ),
+    CompactMode.RETENTIVE: (
+        "**Compaction Style Guidance:** Be retentive. Preserve more verbatim detail, "
+        "especially recent reasoning steps, exact values, file paths, and user "
+        "preferences. Do not over-compress."
+    ),
+    CompactMode.TECHNICAL: (
+        "**Compaction Style Guidance:** Focus on technical specifics. Prioritize "
+        "code snippets, file paths, error messages, stack traces, architectural "
+        "decisions, and current implementation state. Summarize conversational filler."
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class CompactionOptions:
+    """Per-compaction options that do not override session-level preserve config."""
+
+    avoid_cascade: bool = False
+    mode: CompactMode = CompactMode.BALANCED
 
 
 class CompactionResult(NamedTuple):
@@ -143,7 +186,12 @@ def adaptive_preserve_depth(
 @runtime_checkable
 class Compaction(Protocol):
     async def compact(
-        self, messages: Sequence[Message], llm: LLM, *, custom_instruction: str = ""
+        self,
+        messages: Sequence[Message],
+        llm: LLM,
+        *,
+        custom_instruction: str = "",
+        options: CompactionOptions | None = None,
     ) -> CompactionResult:
         """
         Compact a sequence of messages into a new sequence of messages.
@@ -186,9 +234,17 @@ class SimpleCompaction:
         return self.preserve_depth
 
     async def compact(
-        self, messages: Sequence[Message], llm: LLM, *, custom_instruction: str = ""
+        self,
+        messages: Sequence[Message],
+        llm: LLM,
+        *,
+        custom_instruction: str = "",
+        options: CompactionOptions | None = None,
     ) -> CompactionResult:
-        prepare_result = self.prepare(messages, custom_instruction=custom_instruction)
+        options = options if options is not None else CompactionOptions()
+        prepare_result = self.prepare(
+            messages, custom_instruction=custom_instruction, options=options
+        )
         compact_message = prepare_result.compact_message
         to_preserve = prepare_result.to_preserve
         if compact_message is None:
@@ -196,7 +252,7 @@ class SimpleCompaction:
 
         # Call kosong.step to get the compacted context
         # TODO: set max completion tokens
-        if prepare_result.cascade_depth >= 3:
+        if prepare_result.cascade_depth >= 3 and not options.avoid_cascade:
             logger.debug(
                 "Compacting context with cascade prompt (depth={depth})...",
                 depth=prepare_result.cascade_depth,
@@ -233,8 +289,13 @@ class SimpleCompaction:
         cascade_depth: int = 0
 
     def prepare(
-        self, messages: Sequence[Message], *, custom_instruction: str = ""
+        self,
+        messages: Sequence[Message],
+        *,
+        custom_instruction: str = "",
+        options: CompactionOptions | None = None,
     ) -> PrepareResult:
+        options = options if options is not None else CompactionOptions()
         preserve_depth = self._resolve_preserve_depth(messages)
         if not messages or preserve_depth <= 0:
             return self.PrepareResult(compact_message=None, to_preserve=messages)
@@ -277,15 +338,21 @@ class SimpleCompaction:
                 part for part in msg.content if isinstance(part, TextPart)
             )
         cascade_depth = _detect_cascade_depth(to_compact)
-        if cascade_depth >= 3:
+        if options.avoid_cascade:
+            prompt_text = "\n" + prompts.COMPACT
+        elif cascade_depth >= 3:
             prompt_text = "\n" + prompts.COMPACT_CASCADE
         else:
             prompt_text = "\n" + prompts.COMPACT
+
+        mode_guidance = _MODE_GUIDANCE.get(options.mode)
+        if mode_guidance:
+            prompt_text += "\n\n" + mode_guidance
+
         if custom_instruction:
             prompt_text += (
                 "\n\n**User's Custom Compaction Instruction:**\n"
-                "The user has specifically requested the following focus during compaction. "
-                "You MUST prioritize this instruction above the default compression priorities:\n"
+                "Prioritize this user focus over the default priorities and style guidance:\n"
                 f"{custom_instruction}"
             )
         compact_message.content.append(TextPart(text=prompt_text))

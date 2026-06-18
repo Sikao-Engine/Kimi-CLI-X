@@ -1,25 +1,31 @@
 ---
 
-Compact the above agent conversation context according to the following priorities and rules.
+Compact the above agent conversation context.
 
-**Priorities (ordered):**
-1. **Current Task State** — what is being worked on right now
-2. **Errors & Solutions** — all errors encountered and how they were resolved
-3. **Code Evolution** — final working versions only (drop intermediate attempts)
-4. **System Context** — project structure, dependencies, environment setup
-5. **Design Decisions** — architectural choices and rationale
-6. **TODO Items** — unfinished tasks and known issues
+**What to keep (ordered by priority):**
+1. **Current Task State** — what is being worked on right now, plus any user-supplied custom instructions, preferences, or constraints for future turns.
+2. **Errors & Solutions** — preserve the full error message and the final working solution. For multi-turn debugging, summarize intermediate steps as a brief narrative (1-2 lines).
+3. **Code State** — final working versions only (drop intermediate attempts).
+4. **Design Decisions** — architectural choices and rationale.
+5. **Environment** — OS, work directory, Python version, key dependencies, and other relevant setup.
+6. **TODO Items** — unfinished tasks and known issues.
 
-**Rules:**
-- **Keep:** error messages, stack traces, working solutions, current task
-- **Merge:** similar discussions into single summary points
-- **Remove:** redundant explanations, failed attempts (retain lessons learned), verbose comments
-- **Condense:** long code blocks → signatures + key logic only
+**What to remove or condense:**
+- **Drop:** redundant explanations, failed intermediate attempts (retain lessons learned), verbose comments, conversational filler.
+- **Merge:** similar discussions into single summary points.
+- **Condense code:** 
+  - Keep full version if ≤ 20 lines.
+  - For longer code, keep signature + **key logic** only.
+  
+  **Key logic** means:
+  - The core algorithm or business logic (not boilerplate/imports)
+  - Critical control flow (conditionals, loops, error handling)
+  - Non-obvious transformations or side effects
+  - Exclude: imports, logging, type annotations, docstrings, setup/teardown boilerplate
 
-**Special Handling:**
-- **Code:** keep full version if < 20 lines; otherwise keep signature + key logic
-- **Errors:** keep full error message + final solution
-- **Discussions:** extract decisions and action items only
+**Length:** Aim to reduce the context to approximately 20-30% of the original length while preserving all essential information. Err on the side of brevity for aggressive mode and completeness for retentive mode.
+
+**User Instructions:** Preserve any explicit user preferences, constraints, or custom compaction instructions for future turns.
 
 **Output Structure:**
 
@@ -29,7 +35,10 @@ Compact the above agent conversation context according to the following prioriti
 </current_focus>
 
 <environment>
-- [Key setup/config points]
+- OS: [os]
+- Work dir: [path]
+- Key deps: [packages]
+- [Other relevant setup]
 </environment>
 
 <completed_tasks>
@@ -40,19 +49,26 @@ Compact the above agent conversation context according to the following prioriti
 - [Issue]: [Status/Next steps]
 </active_issues>
 
+<todo>
+- [ ] [Unfinished task]
+</todo>
+
 <code_state>
-<file>
-[filename]
-
-**Summary:** [What this file does]
-
-**Key elements:**
-- [Important functions/classes]
-
-**Latest version:**
+<file name="path/to/file.py">
+<summary>What this file does</summary>
+<key_elements>
+- FunctionA: does X
+- ClassB: handles Y
+</key_elements>
+<latest_version>
 [Critical code snippets]
+</latest_version>
 </file>
 </code_state>
+
+<decisions>
+- [Decision]: [Rationale]
+</decisions>
 
 <important_context>
 - [Crucial information not covered above]

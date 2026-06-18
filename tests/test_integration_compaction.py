@@ -6,13 +6,16 @@ import pytest
 from kosong.message import Message
 
 from kimi_cli.soul.compaction import (
+    CompactionOptions,
     CompactionResult,
+    CompactMode,
     SimpleCompaction,
     adaptive_preserve_depth,
     should_auto_compact,
 )
 from kimi_cli.utils.tokens import count_message_tokens
 from kimi_cli.wire.types import TextPart, ThinkPart
+from kimix.tools.context import CompactParams
 
 
 class TestIntegrationCompaction:
@@ -108,3 +111,76 @@ class TestIntegrationCompaction:
         assert not should_auto_compact(
             100_000, 1_000_000, trigger_ratio=0.85, reserved_context_size=50_000
         )
+
+    def test_avoid_cascade_uses_compact_prompt_at_depth_3(self):
+        """Tool-initiated compaction must always use the structured COMPACT prompt."""
+        import kimi_cli.prompts as prompts
+
+        msgs = [
+            Message(role="user", content=[TextPart(text="Previous context has been compacted. A")]),
+            Message(role="user", content=[TextPart(text="Previous context has been compacted. B")]),
+            Message(role="user", content=[TextPart(text="Previous context has been compacted. C")]),
+            Message(role="user", content=[TextPart(text="Previous context has been compacted. D")]),
+            Message(role="user", content=[TextPart(text="Previous context has been compacted. E")]),
+        ]
+        msgs.extend(self._make_messages(10))
+        compactor = SimpleCompaction(max_preserved_messages=2)
+
+        result = compactor.prepare(msgs, options=CompactionOptions(avoid_cascade=True))
+        assert result.cascade_depth >= 3
+        last_part = result.compact_message.content[-1]
+        assert prompts.COMPACT in last_part.text
+        assert prompts.COMPACT_CASCADE not in last_part.text
+
+    def test_mode_guidance_appended_to_prompt(self):
+        """Each non-balanced mode appends the expected style guidance."""
+        msgs = self._make_messages(10)
+        compactor = SimpleCompaction(max_preserved_messages=2)
+
+        balanced = compactor.prepare(msgs, options=CompactionOptions(mode=CompactMode.BALANCED))
+        assert "Compaction Style Guidance" not in balanced.compact_message.content[-1].text
+
+        aggressive = compactor.prepare(msgs, options=CompactionOptions(mode=CompactMode.AGGRESSIVE))
+        assert "Be aggressive" in aggressive.compact_message.content[-1].text
+
+        retentive = compactor.prepare(msgs, options=CompactionOptions(mode=CompactMode.RETENTIVE))
+        assert "Be retentive" in retentive.compact_message.content[-1].text
+
+        technical = compactor.prepare(msgs, options=CompactionOptions(mode=CompactMode.TECHNICAL))
+        assert "Focus on technical specifics" in technical.compact_message.content[-1].text
+
+    def test_custom_instruction_takes_precedence_after_mode_guidance(self):
+        """Mode guidance appears before the user's custom instruction."""
+        msgs = self._make_messages(10)
+        compactor = SimpleCompaction(max_preserved_messages=2)
+
+        result = compactor.prepare(
+            msgs,
+            custom_instruction="Keep every file edit.",
+            options=CompactionOptions(mode=CompactMode.TECHNICAL),
+        )
+        text = result.compact_message.content[-1].text
+        guidance_pos = text.find("Compaction Style Guidance")
+        instruction_pos = text.find("User's Custom Compaction Instruction")
+        assert guidance_pos != -1
+        assert instruction_pos != -1
+        assert guidance_pos < instruction_pos
+
+
+class TestCompactParams:
+    """Unit tests for the Compact tool parameter schema."""
+
+    def test_defaults(self):
+        params = CompactParams()
+        assert params.instruction is None
+        assert params.mode == CompactMode.BALANCED
+
+    def test_accepts_all_modes(self):
+        for mode in CompactMode:
+            params = CompactParams(mode=mode)
+            assert params.mode == mode
+
+    def test_instruction_optional(self):
+        params = CompactParams(instruction="Keep the database schema")
+        assert params.instruction == "Keep the database schema"
+        assert params.mode == CompactMode.BALANCED

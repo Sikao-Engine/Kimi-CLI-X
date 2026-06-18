@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from kimi_cli.soul import get_current_soul_or_none
+from kimi_cli.soul.compaction import CompactMode
 from kimi_cli.soul.kimisoul import KimiSoul
 from pydantic import BaseModel, Field
 
@@ -43,13 +44,24 @@ class CompactParams(BaseModel):
         default=None,
         description="Optional instruction guiding what to preserve during compaction.",
     )
+    mode: CompactMode = Field(
+        default=CompactMode.BALANCED,
+        description=(
+            "High-level compaction style / emphasis. "
+            "One of: balanced (default structured summary), aggressive (shorter), "
+            "retentive (keep more detail), technical (emphasize code/errors/design). "
+            "Does not change preserve depth or cascade behavior."
+        ),
+    )
 
 
 class Compact(CallableTool2):
     name = "Compact"
     description = (
         "Compact / summarize the conversation context to reduce token usage. "
-        "Call this when ContextUsage shows usage is high and you want to free up context."
+        "Call this when ContextUsage shows usage is high and you want to free up context. "
+        "Optionally pass an instruction and a compaction mode (balanced, aggressive, "
+        "retentive, technical) to control the summary style."
     )
     params = CompactParams
 
@@ -66,6 +78,8 @@ class Compact(CallableTool2):
             await soul.compact_context(
                 manual=True,
                 custom_instruction=params.instruction or "",
+                avoid_cascade=True,
+                mode=params.mode,
             )
         except Exception as exc:
             return ToolError(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -103,6 +104,7 @@ def _make_compactable_soul() -> Any:
 
     soul._injection_providers = []
     soul._rotated_paths = []
+    soul._compact_cache_dir = Path(tempfile.mkdtemp())
     return soul
 
 
@@ -114,7 +116,14 @@ async def test_compact_context_notifies_injection_providers() -> None:
     soul.add_injection_provider(provider_a)
     soul.add_injection_provider(provider_b)
 
-    with patch("kimi_cli.soul.kimisoul.wire_send"):
+    with (
+        patch("kimi_cli.soul.kimisoul.wire_send"),
+        patch(
+            "kimi_cli.soul.kimisoul.perform_export",
+            new_callable=AsyncMock,
+            return_value=(Path("/tmp/fake-export.md"), 0),
+        ),
+    ):
         await soul.compact_context()
 
     assert provider_a.on_context_compacted_calls == 1
@@ -129,7 +138,14 @@ async def test_compact_context_notifies_surviving_providers_after_failure() -> N
     soul.add_injection_provider(boom)
     soul.add_injection_provider(recorder)
 
-    with patch("kimi_cli.soul.kimisoul.wire_send"):
+    with (
+        patch("kimi_cli.soul.kimisoul.wire_send"),
+        patch(
+            "kimi_cli.soul.kimisoul.perform_export",
+            new_callable=AsyncMock,
+            return_value=(Path("/tmp/fake-export.md"), 0),
+        ),
+    ):
         await soul.compact_context()
 
     assert recorder.on_context_compacted_calls == 1

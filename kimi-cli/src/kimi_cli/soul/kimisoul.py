@@ -51,7 +51,9 @@ from kimi_cli.soul import (
 )
 from kimi_cli.soul.agent import Agent, Runtime
 from kimi_cli.soul.compaction import (
+    CompactionOptions,
     CompactionResult,
+    CompactMode,
     SimpleCompaction,
     adaptive_preserve_depth,
     estimate_text_tokens,
@@ -259,12 +261,15 @@ class KimiSoul:
         self._slash_commands = self._build_slash_commands()
         self._slash_command_map = self._index_slash_commands(self._slash_commands)
 
-        # Track rotated compaction export files for cleanup on close
-        self._rotated_paths: list[Path] = []
+        # Track rotated compaction export files for cleanup on close.
+        # We keep an explicit list of exported pre-compact markdown files so
+        # anonymous sessions can remove each file individually instead of
+        # wiping a whole directory (which could affect unrelated files).
+        self._compact_cache_dir: list[Path] = []
         self._finalizer = weakref.finalize(
             self,
             KimiSoul._sync_cleanup,
-            self._rotated_paths,
+            self._compact_cache_dir,
             self._context.file_backend,
             self._anonymous,
         )
@@ -1297,6 +1302,8 @@ class KimiSoul:
         *,
         manual: bool = False,
         custom_instruction: str = "",
+        avoid_cascade: bool = False,
+        mode: CompactMode = CompactMode.BALANCED,
     ) -> None:
         """
         Compact the context.
@@ -1306,6 +1313,10 @@ class KimiSoul:
                 (e.g. via the ``/compact`` slash command). When ``False``, the
                 compaction is treated as auto-triggered by the system.
             custom_instruction: Optional user instruction to guide compaction focus.
+            avoid_cascade: When ``True``, always use the structured ``COMPACT``
+                prompt instead of the cascade prompt, regardless of compaction depth.
+            mode: High-level compaction style / emphasis. Does not change preserve
+                depth or adaptive preserve behavior.
 
         Raises:
             LLMNotSet: When the LLM is not set.
@@ -1318,7 +1329,10 @@ class KimiSoul:
             if self._runtime.llm is None:
                 raise LLMNotSet()
             return await self._compaction.compact(
-                self._context.history, self._runtime.llm, custom_instruction=custom_instruction
+                self._context.history,
+                self._runtime.llm,
+                custom_instruction=custom_instruction,
+                options=CompactionOptions(avoid_cascade=avoid_cascade, mode=mode),
             )
 
         start_time = time.monotonic()
@@ -1377,6 +1391,7 @@ class KimiSoul:
         
         rotated_path = self._runtime.session.work_dir / ".kimix_cache" / f"context_{secrets.token_hex(8)}.md"
         self._rotated_paths.append(rotated_path)
+        self._compact_cache_dir.append(rotated_path)
         if rotated_path is not None:
             export_result = await perform_export(
                 history=list(self._context.history),
@@ -1464,7 +1479,11 @@ class KimiSoul:
         _hook_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
     @staticmethod
-    def _sync_cleanup(rotated_paths: list[Path], file_backend: Path, anonymous: bool) -> None:
+    def _sync_cleanup(
+        compact_cache_paths: list[Path],
+        file_backend: Path,
+        anonymous: bool,
+    ) -> None:
         """Best-effort synchronous cleanup of rotated compaction export files.
 
         This is used as a ``weakref.finalize`` callback so cleanup still runs
@@ -1474,9 +1493,9 @@ class KimiSoul:
         """
         if not anonymous:
             return
-        for rotated_path in rotated_paths:
+        for compact_path in compact_cache_paths:
             with suppress(Exception):
-                os.remove(str(rotated_path))
+                os.remove(str(compact_path))
         with suppress(Exception):
             os.remove(str(file_backend))
 
@@ -1516,15 +1535,15 @@ class KimiSoul:
                     logger.exception("Failed to close chat provider")
 
         if self._anonymous:
-            for rotated_path in self._rotated_paths:
+            for compact_path in self._compact_cache_dir:
                 try:
-                    await asyncio.to_thread(os.remove, str(rotated_path))
-                    logger.debug("Removed rotated compaction export: {path}", path=rotated_path)
+                    await asyncio.to_thread(os.remove, str(compact_path))
+                    logger.debug("Removed rotated compaction export: {path}", path=compact_path)
                 except FileNotFoundError:
-                    logger.debug("Rotated compaction export already gone: {path}", path=rotated_path)
+                    logger.debug("Rotated compaction export already gone: {path}", path=compact_path)
                 except Exception:
-                    logger.exception("Failed to remove rotated compaction export: {path}", path=rotated_path)
-            self._rotated_paths.clear()
+                    logger.exception("Failed to remove rotated compaction export: {path}", path=compact_path)
+            self._compact_cache_dir.clear()
 
             try:
                 await asyncio.to_thread(os.remove, str(self._context.file_backend))
