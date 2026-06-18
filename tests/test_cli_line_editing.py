@@ -15,6 +15,27 @@ def _reset_readline_cache() -> None:
     utils._READLINE_ATTEMPTED = False  # type: ignore[attr-defined]
 
 
+class FakeReadline:
+    def __init__(self, doc: str) -> None:
+        self.__doc__ = doc
+        self.bindings: list[str] = []
+
+    def set_completer(self, completer: Any) -> None:
+        self.completer = completer
+
+    def set_completer_delims(self, delims: str) -> None:
+        self.delims = delims
+
+    def parse_and_bind(self, binding: str) -> None:
+        self.bindings.append(binding)
+
+    def get_line_buffer(self) -> str:
+        return ""
+
+    def set_auto_history(self, enabled: bool) -> None:
+        self.auto_history = enabled
+
+
 def test_enable_line_editing_imports_readline(monkeypatch):
     _reset_readline_cache()
     imported: list[str] = []
@@ -92,6 +113,26 @@ def test_input_prints_prompt_before_reading_empty_prompt(monkeypatch, capsys):
 
     assert prompts == [""]
     assert capsys.readouterr().out == "\n>>>>>>>>> Enter your prompt or command:\n"
+
+
+def test_completion_binds_tab_for_libedit(monkeypatch):
+    fake = FakeReadline("Importing this module enables command line editing using libedit readline.")
+    monkeypatch.setattr(utils, "_READLINE_MOD", fake)
+    monkeypatch.setattr(utils, "_READLINE_ATTEMPTED", True)
+
+    assert utils._setup_readline_completion() is True
+
+    assert fake.bindings == ["bind ^I rl_complete"]
+
+
+def test_completion_binds_tab_for_gnu_readline(monkeypatch):
+    fake = FakeReadline("GNU readline")
+    monkeypatch.setattr(utils, "_READLINE_MOD", fake)
+    monkeypatch.setattr(utils, "_READLINE_ATTEMPTED", True)
+
+    assert utils._setup_readline_completion() is True
+
+    assert fake.bindings == ["tab: complete"]
 
 
 def test_completion_lists_all_commands():

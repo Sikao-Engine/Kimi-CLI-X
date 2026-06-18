@@ -120,6 +120,13 @@ class _CommandCompleter:
 
 _COMMAND_COMPLETER = _CommandCompleter()
 
+
+def _is_libedit_readline(rl: Any) -> bool:
+    """Return True when Python's readline module is backed by libedit."""
+    doc = getattr(rl, "__doc__", "") or ""
+    return "libedit" in doc.lower()
+
+
 def _setup_readline_completion() -> bool:
     """Enable command completion. Returns True on success."""
     rl = _ensure_readline()
@@ -130,7 +137,10 @@ def _setup_readline_completion() -> bool:
     if hasattr(rl, "set_completer_delims"):
         rl.set_completer_delims(" \t\n")
     if hasattr(rl, "parse_and_bind"):
-        rl.parse_and_bind("tab: complete")
+        if _is_libedit_readline(rl):
+            rl.parse_and_bind("bind ^I rl_complete")
+        else:
+            rl.parse_and_bind("tab: complete")
     if hasattr(rl, "set_auto_history"):
         rl.set_auto_history(True)
     return True
