@@ -39,6 +39,7 @@ Available commands:
   {colorful_text('/export:<path>', fg=Color.YELLOW)}  - Export session messages to file
   {colorful_text('/resume:<id>', fg=Color.YELLOW)}    - Close current session and resume a session by ID
   {colorful_text('/rename:<id>', fg=Color.YELLOW)}    - Rename the current session to a new ID
+  {colorful_text('/sessions', fg=Color.YELLOW)}       - List resumable sessions for the current working directory
   {colorful_text('/ralph:on', fg=Color.YELLOW)}       - Enable Ralph mode
   {colorful_text('/ralph:off', fg=Color.YELLOW)}      - Disable Ralph mode
   {colorful_text('/ralph:<num>', fg=Color.YELLOW)}    - Set Ralph iterations

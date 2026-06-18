@@ -1,6 +1,7 @@
 from typing import Any
 import os
 from pathlib import Path
+from datetime import datetime
 
 import kimix.base as base
 from . import constants
@@ -106,6 +107,38 @@ def _cmd_rename(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]
         import traceback
         print_error(f'Rename failed: {e}')
         print_error(traceback.format_exc())
+    return None, False
+
+
+def _cmd_sessions(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
+    from kaos.path import KaosPath
+    from kimi_cli.session import Session as CliSession
+
+    session = get_default_session()
+    current_id = None
+    if session is None:
+        work_dir = KaosPath('.')
+    else:
+        cli_session = session._cli.session
+        work_dir = cli_session.work_dir
+        current_id = cli_session.id
+
+    try:
+        sessions = asyncio.run(CliSession.list(work_dir))
+    except Exception as e:
+        print_error(f'Failed to list sessions: {e}')
+        return None, False
+
+    if not sessions:
+        print_warning('No sessions found.')
+        return None, False
+
+    id_width = max(len('session id'), *(len(item.id) for item in sessions))
+    print_info(f'{" ":1}  {"session id":<{id_width}}  {"updated at":<19}  title')
+    for item in sessions:
+        marker = '*' if item.id == current_id else ' '
+        updated_at = datetime.fromtimestamp(item.updated_at).strftime('%Y-%m-%d %H:%M:%S')
+        print(f'{marker}  {item.id:<{id_width}}  {updated_at}  {item.title}')
     return None, False
 
 
@@ -401,6 +434,7 @@ _command_map = {
     'export': _cmd_export,
     'resume': _cmd_resume,
     'rename': _cmd_rename,
+    'sessions': _cmd_sessions,
     'ralph': _cmd_ralph,
     'cot': _cmd_cot,
     'supervisor': _cmd_supervisor,
