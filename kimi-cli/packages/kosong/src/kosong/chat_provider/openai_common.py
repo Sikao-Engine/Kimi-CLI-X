@@ -94,6 +94,10 @@ async def _drain_awaitable(awaitable: Awaitable[object]) -> None:
         await asyncio.wait_for(awaitable, timeout=5.0)
     except asyncio.TimeoutError:
         return
+    except asyncio.CancelledError:
+        # Outer task was cancelled (e.g. during event-loop shutdown).
+        # Swallow silently — the OS will reclaim the sockets.
+        return
     except RuntimeError as exc:
         # On Windows/Python 3.14, closing an httpx.AsyncClient whose
         # underlying transports were bound to a now-closed ProactorEventLoop

@@ -7,6 +7,7 @@ except ModuleNotFoundError as exc:
     ) from exc
 
 import asyncio
+import contextlib
 import json
 import orjson
 import re
@@ -113,6 +114,10 @@ _ANTHROPIC_CLOSE_TASKS: set[asyncio.Task[None]] = set()
 
 def _on_close_task_done(task: asyncio.Task[None]) -> None:
     _ANTHROPIC_CLOSE_TASKS.discard(task)
+    if task.cancelled():
+        return
+    with contextlib.suppress(Exception):
+        task.exception()
 
 
 async def _drain_awaitable(awaitable: Awaitable[object]) -> None:
@@ -120,6 +125,10 @@ async def _drain_awaitable(awaitable: Awaitable[object]) -> None:
     try:
         await asyncio.wait_for(awaitable, timeout=5.0)
     except asyncio.TimeoutError:
+        return
+    except asyncio.CancelledError:
+        # Outer task was cancelled (e.g. during event-loop shutdown).
+        # Swallow silently — the OS will reclaim the sockets.
         return
     except RuntimeError as exc:
         # On Windows/Python 3.14, closing an httpx.AsyncClient whose
@@ -487,6 +496,10 @@ class Anthropic:
             # when the process is shutting down on Windows/Python 3.14.
             if "Event loop is closed" not in str(exc):
                 raise
+        except asyncio.CancelledError:
+            # Cancelled during close (e.g. event-loop shutdown).
+            # Swallow silently — the OS will reclaim the sockets.
+            return
 
     def close(self) -> None:
         """Schedule an asynchronous close of the underlying HTTP client.
