@@ -1390,7 +1390,6 @@ class KimiSoul:
         # --- Export pre-compaction context ---
         
         rotated_path = self._runtime.session.work_dir / ".kimix_cache" / f"context_{secrets.token_hex(8)}.md"
-        self._rotated_paths.append(rotated_path)
         self._compact_cache_dir.append(rotated_path)
         if rotated_path is not None:
             export_result = await perform_export(
