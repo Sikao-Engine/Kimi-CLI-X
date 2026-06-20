@@ -1,5 +1,9 @@
 """PowerShell tool that executes commands via the system PowerShell executable."""
 
+import functools
+import os
+import shutil
+import subprocess
 import sys
 from typing import TYPE_CHECKING
 
@@ -15,6 +19,106 @@ from kimix.tools.common import _maybe_export_output_async, _summarize_long_outpu
 
 if TYPE_CHECKING:
     from kimi_agent_sdk import CallableTool2 as _CallableTool2
+
+def _print_warning(message: str) -> None:
+    """Print a yellow WARNING message to stderr."""
+    yellow = "\033[33m"
+    reset = "\033[0m"
+    print(f"{yellow}WARNING: {message}{reset}", file=sys.stderr, flush=True)
+
+
+def _pwsh_major_version(path: str) -> int | None:
+    """Return the major version reported by a PowerShell executable, or None."""
+    try:
+        output = subprocess.check_output(
+            [path, "-NoP", "-NonI", "-C", "$PSVersionTable.PSVersion.Major"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        ).strip()
+        return int(output)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+
+
+def _where_candidates(name: str) -> list[str]:
+    """Return candidate paths reported by ``where.exe <name>``."""
+    try:
+        result = subprocess.run(
+            ["where.exe", name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+@functools.lru_cache(maxsize=1)
+def find_pwsh() -> str | None:
+    """Find PowerShell 7.x on the current platform.
+
+    Resolution order:
+      1. ``pwsh`` / ``pwsh.exe`` on PATH (via ``shutil.which``).
+      2. ``where.exe pwsh.exe`` on Windows.
+      3. Common fixed installation paths.
+
+    Returns the absolute path to a PowerShell 7+ executable, or ``None`` if
+    only Windows PowerShell 5.1 (or no PowerShell) is available.
+    """
+    candidates: list[str] = []
+
+    if sys.platform == "win32":
+        names = ["pwsh.exe", "pwsh"]
+    else:
+        names = ["pwsh"]
+
+    # 1. PATH
+    for name in names:
+        resolved = shutil.which(name)
+        if resolved:
+            candidates.append(resolved)
+
+    # 2. where.exe (Windows only)
+    if sys.platform == "win32":
+        for name in names:
+            candidates.extend(_where_candidates(name))
+
+    # 3. Fixed common install locations
+    if sys.platform == "win32":
+        candidates.extend(
+            [
+                r"C:\Program Files\PowerShell\7\pwsh.exe",
+                r"C:\Program Files (x86)\PowerShell\7\pwsh.exe",
+            ]
+        )
+    else:
+        candidates.extend(
+            [
+                "/opt/microsoft/powershell/7/pwsh",
+                "/usr/local/bin/pwsh",
+                "/usr/bin/pwsh",
+            ]
+        )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate = shutil.which(candidate) or candidate
+        if not os.path.exists(candidate):
+            continue
+        norm = os.path.normcase(os.path.abspath(candidate))
+        if norm in seen:
+            continue
+        seen.add(norm)
+        major = _pwsh_major_version(candidate)
+        if major is not None and major >= 7:
+            return candidate
+
+    return None
 
 
 class PowershellParams(BaseModel):
@@ -44,6 +148,13 @@ class Powershell(CallableTool2[PowershellParams]):
         self._session = session
         if not _bash_tool._should_enable_powershell():
             raise SkipThisTool()
+
+        self._pwsh_path = find_pwsh()
+        if self._pwsh_path is None:
+            _print_warning(
+                "PowerShell 7.x not found on this system; falling back to Windows PowerShell 5.1. "
+                "PowerShell 7 syntax will be downgraded automatically, which may change command behavior."
+            )
 
         # Pre-normalize forbidden commands once at init time for O(1) per-call lookup.
         # PowerShell is case-insensitive; normalize to lowercase.
@@ -77,12 +188,20 @@ class Powershell(CallableTool2[PowershellParams]):
                 brief="Empty command",
             )
 
-        # Transform PS7 syntax to PS5.1 compatible syntax
-        cmd, transform_warnings = pwsh_transform(params.cmd)
-        transform_warning = ""
-        if transform_warnings:
-            warning_lines = "\n".join(w for w in transform_warnings)
-            transform_warning = '\n[WARNING]' + warning_lines
+        if self._pwsh_path is not None:
+            # PowerShell 7 is available: run the command as-is without syntax transforms.
+            cmd = params.cmd
+            transform_warning = ""
+            executable = self._pwsh_path
+        else:
+            # Fall back to Windows PowerShell 5.1 and downgrade PS7 syntax.
+            cmd, transform_warnings = pwsh_transform(params.cmd)
+            transform_warning = ""
+            if transform_warnings:
+                warning_lines = "\n".join(w for w in transform_warnings)
+                transform_warning = '\n[WARNING]' + warning_lines
+            executable = "powershell"
+
         if self._forbidden_keywords:
             # PowerShell is case-insensitive: compare lowercased strings.
             normalized_cmd = " ".join(cmd.split()).lower()
@@ -100,7 +219,7 @@ class Powershell(CallableTool2[PowershellParams]):
             refresh_env_from_registry()
 
         # Build the command line to pass to PowerShell -Command
-        process_task = ProcessTask('powershell', ["-NoP", "-NonI", "-Exec", "Bypass", "-NoL", "-C", "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;", cmd], None, None)
+        process_task = ProcessTask(executable, ["-NoP", "-NonI", "-Exec", "Bypass", "-NoL", "-C", "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;", cmd], None, None)
         task_id = await process_task.start(self._session, "pwsh")
 
         await process_task.wait(params.timeout)
