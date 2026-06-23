@@ -126,6 +126,44 @@ def _install_git() -> tuple[bool, bool]:
         return False, False
 
 
+def _install_ripgrep() -> tuple[bool, bool]:
+    """Prompt for and install ripgrep if needed (cross-platform).
+
+    Returns (was_installed, should_restart_shell).
+    """
+    bin_name = "rg.exe" if sys.platform == "win32" else "rg"
+    if command_exists(bin_name):
+        print("✅ Ripgrep is already installed, skipping.")
+        return False, False
+
+    if not _ask_yes_no("Ripgrep was not found. Install Ripgrep?"):
+        print("⏭️  Skipping Ripgrep installation.")
+        return False, False
+
+    rg_script = Path(__file__).parent / "scripts" / "install_ripgrep.py"
+    if not rg_script.exists():
+        print(f"⚠️  install_ripgrep.py not found at {rg_script}, skipping.")
+        return False, False
+
+    try:
+        scripts_dir = str(rg_script.parent)
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        import install_ripgrep
+
+        print("\n▶ Installing Ripgrep ...")
+        result = install_ripgrep.install_ripgrep()
+        if result:
+            print(f"✅ Ripgrep installed at {result}.")
+            return True, True
+        else:
+            print("⚠️  Ripgrep installation was not successful (non-fatal).")
+            return False, False
+    except Exception as e:
+        print(f"⚠️  Could not install Ripgrep: {e}")
+        return False, False
+
+
 def main() -> int:
     # 1. Check if python or uv exists
     has_python = command_exists("python") or command_exists("python3")
@@ -148,9 +186,10 @@ def main() -> int:
     # 2. Optional binary installations (before uv sync so they are available)
     coreutils_installed, cu_restart = _install_coreutils()
     git_installed, git_restart = _install_git()
+    rg_installed, rg_restart = _install_ripgrep()
 
-    any_binary_installed = coreutils_installed or git_installed
-    needs_restart = cu_restart or git_restart
+    any_binary_installed = coreutils_installed or git_installed or rg_installed
+    needs_restart = cu_restart or git_restart or rg_restart
 
     if any_binary_installed and needs_restart:
         print(

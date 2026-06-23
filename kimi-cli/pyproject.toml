@@ -10,7 +10,6 @@ dependencies = [
     "aiohttp==3.13.5",
     "typer==0.21.1",
     "kosong-x==0.53.7",
-    "ripgrepy>=2.2.0",
     "loguru>=0.6.0",
     "pillow==12.2.0",
     "pyyaml==6.0.3",

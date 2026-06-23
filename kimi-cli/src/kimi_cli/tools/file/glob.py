@@ -262,6 +262,11 @@ class Params(BaseModel):
         description="Include .gitignore files.",
         default=False,
     )
+    timeout: int = Field(
+        description="Maximum time in seconds to wait for the search to complete.",
+        default=10,
+        ge=1,
+    )
 
 
 class Glob(CallableTool2[Params]):
@@ -322,20 +327,23 @@ class Glob(CallableTool2[Params]):
                     brief=f"Invalid directory: {display_dir}",
                 )
 
-            # Load gitignore rules if needed (sync I/O in executor)
+            # Load gitignore rules if needed (sync I/O in executor) and perform
+            # the glob search under a single timeout budget.
             gitignore_rules: list[_GitignoreRule] = []
-            if not params.include_ignored:
-                try:
-                    resolved_dir = Path(str(dir_path)).resolve()
-                    gitignore_rules = await asyncio.to_thread(_get_gitignore_rules, resolved_dir)
-                except Exception:
-                    pass
-
-            # Perform the glob search - bounded streaming with inline filtering
             matches: list[KaosPath] = []
             truncated = False
+            timed_out = False
             try:
-                async with asyncio.timeout(10):
+                async with asyncio.timeout(params.timeout):
+                    if not params.include_ignored:
+                        try:
+                            resolved_dir = Path(str(dir_path)).resolve()
+                            gitignore_rules = await asyncio.to_thread(
+                                _get_gitignore_rules, resolved_dir
+                            )
+                        except Exception:
+                            pass
+
                     async for match in dir_path.glob(pattern):
                         if not params.include_dirs and not await match.is_file():
                             continue
@@ -343,7 +351,9 @@ class Glob(CallableTool2[Params]):
                         if gitignore_rules:
                             try:
                                 match_resolved = Path(str(match)).resolve()
-                                if _is_ignored_by_gitignore(match_resolved, gitignore_rules, resolved_dir):
+                                if _is_ignored_by_gitignore(
+                                    match_resolved, gitignore_rules, resolved_dir
+                                ):
                                     continue
                             except Exception:
                                 pass
@@ -353,7 +363,7 @@ class Glob(CallableTool2[Params]):
                             matches.pop()
                             break
             except TimeoutError:
-                truncated = True
+                timed_out = True
 
             # Sort for consistent output
             matches.sort()
@@ -395,6 +405,12 @@ class Glob(CallableTool2[Params]):
                 message += (
                     f" Showing first {MAX_MATCHES} matches. "
                     "Use a more specific pattern."
+                )
+
+            if timed_out:
+                message += (
+                    f" Search timed out after {params.timeout}s; "
+                    "showing matches collected so far."
                 )
 
             if truncated_by_bytes:
