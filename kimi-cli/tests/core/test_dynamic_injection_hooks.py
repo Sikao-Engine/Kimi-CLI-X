@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -104,7 +103,7 @@ def _make_compactable_soul() -> Any:
 
     soul._injection_providers = []
     soul._rotated_paths = []
-    soul._compact_cache_dir = Path(tempfile.mkdtemp())
+    soul._compact_cache_dir = []
     return soul
 
 

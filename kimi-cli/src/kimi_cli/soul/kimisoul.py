@@ -66,6 +66,7 @@ from kimi_cli.soul.dynamic_injection import (
     normalize_history,
 )
 from kimi_cli.soul.dynamic_injections.afk_mode import AfkModeInjectionProvider
+from kimi_cli.soul.dynamic_injections.compact_reminder import CompactReminderProvider
 from kimi_cli.soul.message import (
     check_message,
     strip_system_reminders,
@@ -251,6 +252,13 @@ class KimiSoul:
                 []
                 if self._runtime.config.skip_afk_prompt_injection
                 else [AfkModeInjectionProvider()]
+            ),
+            *(
+                []
+                if not self._loop_control.compact_reminder_enabled
+                else [CompactReminderProvider(
+                    threshold=self._loop_control.compact_reminder_threshold,
+                )]
             ),
         ]
         self._hook_engine: HookEngine = HookEngine()

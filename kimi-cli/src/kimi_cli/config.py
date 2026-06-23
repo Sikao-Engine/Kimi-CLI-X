@@ -135,6 +135,13 @@ class LoopControl(BaseModel):
     adaptive_preserve_enabled: bool = Field(default=True)
     """When true, dynamically adjust preserve depth based on session signals
     (errors, tool calls, reasoning). Default is true."""
+    compact_reminder_enabled: bool = Field(default=True)
+    """When true, inject a system-reminder to suggest compaction when context usage
+    exceeds compact_reminder_threshold. Default is true."""
+    compact_reminder_threshold: float = Field(default=0.70, ge=0.5, le=0.95)
+    """Context usage ratio at which the compact reminder is injected.
+    Should be lower than compaction_trigger_ratio to give the agent a heads-up.
+    Default is 0.70 (70%)."""
     auto_retrieve_history: bool = Field(default=True)
     """When true, automatically search archived conversation history before each
     turn and inject the most relevant past turn if it exceeds the similarity

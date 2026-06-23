@@ -39,6 +39,8 @@ def test_default_config_dump():
                 "max_preserved_messages": 2,
                 "min_preserved_messages": 1,
                 "adaptive_preserve_enabled": True,
+                "compact_reminder_enabled": True,
+                "compact_reminder_threshold": 0.7,
                 "auto_retrieve_history": True,
                 "auto_retrieve_history_threshold": 5.0,
                 "auto_retrieve_working_memory": True,
