@@ -103,13 +103,13 @@
 
 ### 待办提醒
 
-每次主提示执行结束后，系统会检查当前会话中是否存在未完成的 `todos`。若存在，会自动追加一条 `<system-reminder>` 提醒 Agent 先完成所有 pending / in_progress 的待办事项再结束。该机制与 `SetTodoList` 工具配合，确保长任务不会遗漏中间步骤。
+每次主提示执行结束后，系统会检查当前会话中是否存在未完成的 `todos`。若存在，会自动追加一条 `<system-reminder>` 提醒 Agent 先完成所有 pending / in_progress 的待办事项再结束。该机制与 `TodoList` 工具配合，确保长任务不会遗漏中间步骤。
 
 ---
 
-## SetTodoList 工具
+## TodoList 工具
 
-`SetTodoList` 是用于跟踪任务进度的工具，在执行过程中自动调用。
+`TodoList` 是用于跟踪任务进度的工具，在执行过程中自动调用。
 
 ### 功能概述
 

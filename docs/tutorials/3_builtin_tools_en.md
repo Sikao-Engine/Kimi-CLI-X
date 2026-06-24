@@ -14,7 +14,7 @@ A coding agent's power comes from efficient interaction with the environment. Th
 | **Code Execution** | `Run`, `Python`, `Bash`, `Powershell` | Execute executables, bash / powershell commands, or Python code |
 | **Process Management** | `TaskOutput`, `Input` | Interact with background processes |
 | **Search & Info** | `FetchURL`, `Search` | Fetch web content, search local skills |
-| **State & Tracking** | `SetTodoList` | Track progress |
+| **State & Tracking** | `TodoList` | Track progress |
 | **Sub-agent & Session Management** | `Agent`, `AgentList`, `AgentClose` | Create, list, and close sub-agent sessions |
 
 ---
@@ -84,7 +84,7 @@ Semantic search in local skill directories. Optional `dest_path` filter.
 
 ## State & Tracking
 
-#### `SetTodoList`
+#### `TodoList`
 Track multi-step task progress. States: `pending`, `in_progress`, `done`. Always pass the **complete list** on update.
 
 
@@ -129,7 +129,7 @@ Break complex tasks into tool-annotated steps.
 > "1. **Research**: `Glob` + `ReadFile` existing CLI commands
 > 2. **Implement**: `WriteFile` or `EditFile` for new command
 > 3. **Verify**: `Run` tests
-> 4. **Track**: `SetTodoList` to mark complete"
+> 4. **Track**: `TodoList` to mark complete"
 
 ### 5. Meta-Prompting
 Embed tool guidelines in system prompts.
@@ -160,7 +160,7 @@ Embed tool guidelines in system prompts.
 1. `Glob` + `ReadFile` to research existing structure
 2. Draft implementation plan
 3. `EditFile`/`WriteFile` changes
-4. `SetTodoList` track subtasks
+4. `TodoList` track subtasks
 5. `Run` tests
 
 **External document analysis:**
