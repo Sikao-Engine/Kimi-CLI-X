@@ -22,7 +22,7 @@ _DONE_REMINDER_TEMPLATE = (
 
 # Single-word completion markers matched with word boundaries.
 _SINGLE_WORD_KEYWORDS = (
-    "done|finished|completed|complete|resolved|fixed|closed|verified|approved|"
+    "summary|done|finished|completed|complete|resolved|fixed|closed|verified|approved|"
     "shipped|delivered|merged|deployed|released|published|finalized|finalised|"
     "ready|set|concluded|accomplished|outstanding|addressed|handled|cleared|settled"
 )

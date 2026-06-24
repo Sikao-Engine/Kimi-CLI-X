@@ -388,8 +388,7 @@ async def prompt_async(
         if session:
             if export_todo_list_path is not None:
                 await _export_session_todos(session, export_todo_list_path)
-            else:
-                await _clear_session_todos(session)
+            await _clear_session_todos(session)
             if close_session_after_prompt:
                 await close_session_async(session)
         base._stream.print_word("", True)

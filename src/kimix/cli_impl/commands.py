@@ -16,7 +16,7 @@ def _read_multi_line(text_arr: list[str], *, allow_cancel: bool = True) -> tuple
     """
     lines: list[str] = []
     while True:
-        s = _input('', text_arr, multi_line_mode=True)
+        s = _input('', text_arr)
         if s.strip() == '/end':
             break
         if allow_cancel and s.strip() == '/cancel':
