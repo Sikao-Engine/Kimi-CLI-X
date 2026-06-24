@@ -85,11 +85,11 @@ async def _maybe_build_todo_reminder(session: Session, *, strong: bool = False) 
     lines = ["<system-reminder>"]
     if strong:
         lines.append(
-            "CRITICAL: The previous todo review did NOT finish all tasks. You STILL have unfinished todos managed by the `TodoList` tool. You MUST use `TodoList` to mark EVERY remaining item as `done` BEFORE finishing this session. Do not declare completion, do not run final verification, and do not end until the todo list is empty or all entries show `[done]`."
+            "CRITICAL: Unfinished `TodoList` tasks remain. Mark every remaining item `done` with `TodoList` before ending this session. Do not declare completion or run final verification until the todo list is empty or all entries show `[done]`."
         )
     else:
         lines.append(
-            "You have unfinished todos managed by the `TodoList` tool. Review the list below and use `TodoList` to update task statuses — complete all pending/in-progress items before finishing:"
+            "You have unfinished `TodoList` tasks. Update statuses below and complete all pending/in-progress items before finishing."
         )
     for todo in todos:
         title = getattr(todo, "title", "")
