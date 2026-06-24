@@ -380,7 +380,7 @@ async def prompt_async(
                         require_new_line=True,
                     )
                     break
-        else:
+        elif not prompt_success:
             base._stream.colorful_print_word("prompt failed.", fg=Color.BRIGHT_RED, styles=[Style.BOLD], require_new_line=True)
 
 
