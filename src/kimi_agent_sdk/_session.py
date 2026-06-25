@@ -98,6 +98,7 @@ class Session:
         if self._cancel_event is not None:
             self._cancel_event.set()
         await self._cleanup_tools()
+        await self._close_chat_provider()
 
         work_dir = self._cli.session.work_dir
         session_id = self._cli.session.id
@@ -144,6 +145,7 @@ class Session:
             if self._cancel_event is not None:
                 self._cancel_event.set()
             await self._cleanup_tools()
+            await self._close_chat_provider()
 
             old_session_id = self._cli.session.id
             cli_session = await CliSession.rename(work_dir, old_session_id, new_session_id)
@@ -220,6 +222,38 @@ class Session:
         result = cleanup()
         if inspect.isawaitable(result):
             await result
+
+    async def _close_chat_provider(self) -> None:
+        """Close the underlying LLM chat provider's HTTP client if available.
+
+        This prevents the Anthropic SDK's ``AsyncHttpxClientWrapper.__del__``
+        from scheduling an ``aclose()`` task after the event loop has already
+        been torn down, which on Windows/Python 3.14 surfaces as a noisy
+        ``RuntimeError: Event loop is closed`` task exception.
+        """
+        try:
+            soul = getattr(self._cli, "soul", None)
+            if soul is None:
+                return
+            runtime = getattr(soul, "_runtime", None)
+            if runtime is None:
+                return
+            llm = getattr(runtime, "llm", None)
+            if llm is None:
+                return
+            chat_provider = getattr(llm, "chat_provider", None)
+            if chat_provider is None:
+                return
+            aclose = getattr(chat_provider, "aclose", None)
+            if aclose is None:
+                return
+            await aclose()
+        except Exception:
+            # Best-effort cleanup; never let provider close failures escape.
+            # This also covers the harmless ``RuntimeError: Event loop is closed``
+            # that can occur on Windows/Python 3.14 when the loop is already gone
+            # (the OS will reclaim the socket).
+            pass
 
     @staticmethod
     async def create(
@@ -587,6 +621,7 @@ class Session:
         if self._cancel_event is not None:
             self._cancel_event.set()
         await self._cleanup_tools()
+        await self._close_chat_provider()
         if getattr(self, "_anonymous", False):
             await self._cli.session.delete()
             

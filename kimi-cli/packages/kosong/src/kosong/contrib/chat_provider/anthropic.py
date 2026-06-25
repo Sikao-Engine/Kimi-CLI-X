@@ -285,6 +285,14 @@ class Anthropic:
     ):
         self._model = model
         self._stream = stream
+        # Provide our own httpx.AsyncClient so the Anthropic SDK does not create
+        # its default ``AsyncHttpxClientWrapper``. That wrapper's ``__del__``
+        # schedules ``self.aclose()`` as a task on the running loop; on
+        # Windows/Python 3.14, if the loop is torn down before the task finishes,
+        # the unretrieved exception surfaces as a noisy
+        # ``RuntimeError: Event loop is closed`` traceback.
+        if "http_client" not in client_kwargs:
+            client_kwargs = {**client_kwargs, "http_client": httpx.AsyncClient()}
         self._client = AsyncAnthropic(api_key=api_key, base_url=base_url, **client_kwargs)
         self._tool_message_conversion: ToolMessageConversion | None = tool_message_conversion
         self._metadata = metadata

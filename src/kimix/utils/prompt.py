@@ -3,7 +3,6 @@ import orjson
 import os
 import subprocess
 import sys
-import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
@@ -197,62 +196,6 @@ async def _export_session_todos(session: Session, path: Path) -> None:
         path.write_text(orjson.dumps(export_data).decode("utf-8"), encoding="utf-8")
     except Exception as exc:
         base.print_error(f"Failed to export todo list to {path}: {exc}")
-
-
-async def _import_session_todos(session: Session, path: Path) -> None:
-    """Import a todo list from ``path`` into the session's ``TodoList`` tool.
-
-    The JSON file is expected to contain a list of objects with ``title`` and
-    ``status`` keys. Todos are loaded via the tool's public interface so that
-    persistence and validation are handled consistently.
-    """
-    if not path.exists():
-        return
-
-    try:
-        raw_data = orjson.loads(path.read_text(encoding="utf-8"))
-    except (orjson.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
-        base.print_error(f"Failed to read todo list from {path}: {exc}")
-        return
-    if not isinstance(raw_data, list):
-        base.print_error(f"Invalid todo list format in {path}: expected a list")
-        return
-
-    cli = getattr(session, "_cli", None)
-    if cli is None:
-        return
-
-    toolset = getattr(getattr(getattr(cli, "soul", None), "agent", None), "toolset", None)
-    if toolset is None:
-        return
-
-    try:
-        todo_tool = toolset.find("TodoList")
-    except Exception:
-        return
-    if todo_tool is None:
-        return
-
-    from kimi_cli.tools.todo import Params, Todo
-
-    todos: list[Todo] = []
-    for item in raw_data:
-        if not isinstance(item, dict):
-            continue
-        title = item.get("title", "")
-        status = item.get("status", "")
-        try:
-            todos.append(Todo(title=title, status=status))
-        except Exception:
-            continue
-
-    if not todos:
-        return
-
-    try:
-        await todo_tool(Params(todos=todos, force_replace=True))
-    except Exception as exc:
-        base.print_error(f"Failed to import todo list into session: {exc}")
 
 
 async def _run_single_prompt(
@@ -588,12 +531,6 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
                 )
                 # Continue the loop so the user can try again
 
-        # User approved — export planner todos, close planner session, then proceed to implementation
-        plan_todos_path = Path(".kimix_cache") / f"plan_todos_{uuid.uuid4().hex}.json"
-        if planner_session:
-            await _export_session_todos(planner_session, plan_todos_path)
-            await close_session_async(planner_session)
-            planner_session = None
         _enable_plan.value = False
         if not execute_plan:
             return
@@ -610,13 +547,11 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
         plan_content = plan_file.read_text(encoding="utf-8", errors="replace")
         plan_size = len(plan_content.encode("utf-8"))
         regular_session = _create_default_session()
-        if plan_todos_path.exists():
-            await _import_session_todos(regular_session, plan_todos_path)
         if plan_size > 100 * 1024:
-            impl_prompt = f"Call `TodoList` to get current todo list. Implement the plan in `{plan_file}`."
+            impl_prompt = f"Read the plan in `{plan_file}`, set up a todo list using `TodoList` with the implementation steps, then implement the plan."
             review_reminder = f"Review the plan in `{plan_file}` and ensure all tasks are completed."
         else:
-            impl_prompt = f"Call `TodoList` to get current todo list. Implement this plan:\n\n{plan_content}"
+            impl_prompt = f"Set up a todo list using `TodoList` with the implementation steps from the following plan, then implement the plan:\n\n{plan_content}"
             review_reminder = f"Review this plan and ensure all tasks are completed:\n\n{plan_content}"
         await prompt_async(
             impl_prompt,

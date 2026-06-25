@@ -305,6 +305,21 @@ class OpenAICompatibleProviderMixin:
         model_parameters.update(self._generation_kwargs)
         return model_parameters
 
+    async def aclose(self) -> None:
+        """Close the underlying AsyncOpenAI HTTP client.
+
+        Safe to call multiple times; subsequent calls are no-ops. Errors during
+        close (including the harmless ``RuntimeError: Event loop is closed``
+        that can occur on Windows/Python 3.14 during shutdown) are swallowed.
+        """
+        try:
+            await self.client.close()
+        except RuntimeError as exc:
+            if "Event loop is closed" not in str(exc):
+                raise
+        except asyncio.CancelledError:
+            return
+
 
 def extract_reasoning_from_content(
     content: list[ContentPart],

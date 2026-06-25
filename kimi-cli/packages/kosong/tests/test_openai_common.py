@@ -251,3 +251,53 @@ class TestOpenAIStreamingErrorPropagation:
         with pytest.raises(APIConnectionError, match="Network connection lost"):
             async for _ in msg:
                 pass
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_provider_aclose_closes_http_client() -> None:
+    provider = OpenAILegacy(
+        model="gpt-4.1",
+        api_key="test-key",
+        base_url="https://example.com/v1",
+    )
+    http_client = provider.client._client
+    assert isinstance(http_client, httpx.AsyncClient)
+    assert http_client.is_closed is False
+
+    await provider.aclose()
+
+    assert http_client.is_closed is True
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_provider_aclose_swallows_event_loop_closed() -> None:
+    class FakeClient:
+        async def close(self) -> None:
+            raise RuntimeError("Event loop is closed")
+
+    provider = OpenAILegacy(
+        model="gpt-4.1",
+        api_key="test-key",
+        base_url="https://example.com/v1",
+    )
+    provider.client = FakeClient()  # type: ignore[assignment]
+
+    # Should not raise.
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_provider_aclose_swallows_cancelled_error() -> None:
+    class FakeClient:
+        async def close(self) -> None:
+            raise asyncio.CancelledError()
+
+    provider = OpenAILegacy(
+        model="gpt-4.1",
+        api_key="test-key",
+        base_url="https://example.com/v1",
+    )
+    provider.client = FakeClient()  # type: ignore[assignment]
+
+    # Should not raise.
+    await provider.aclose()
