@@ -149,7 +149,6 @@ def test_create_llm_openai_legacy_custom_headers():
     assert llm is not None
     assert isinstance(llm.chat_provider, OpenAILegacy)
     assert llm.chat_provider._client_kwargs.get("default_headers") == {
-        "User-Agent": "KimiX",
         "X-Custom": "value",
         "X-Canary": "always",
     }
@@ -259,7 +258,6 @@ def test_create_llm_openai_responses_custom_headers():
     assert llm is not None
     assert isinstance(llm.chat_provider, OpenAIResponses)
     assert llm.chat_provider._client_kwargs.get("default_headers") == {
-        "User-Agent": "KimiX",
         "X-Custom": "value",
     }
 
@@ -367,6 +365,7 @@ def test_create_llm_custom_headers_isolated_between_instances():
 
 def test_create_llm_no_custom_headers_includes_user_agent():
     """When custom_headers is None, the default KimiX User-Agent is still sent."""
+def test_create_llm_no_custom_headers_has_empty_headers():
     from kosong.contrib.chat_provider.openai_legacy import OpenAILegacy
 
     provider = LLMProvider(
@@ -383,8 +382,7 @@ def test_create_llm_no_custom_headers_includes_user_agent():
     llm = create_llm(provider, model)
     assert llm is not None
     assert isinstance(llm.chat_provider, OpenAILegacy)
-    assert llm.chat_provider.client._custom_headers == {"User-Agent": "KimiX"}
-
+    assert llm.chat_provider.client._custom_headers == {}
 
 def test_create_llm_openai_responses_thinking_false_no_reasoning_in_params():
     """thinking=False should call with_thinking("off"), which sets reasoning_effort=None.

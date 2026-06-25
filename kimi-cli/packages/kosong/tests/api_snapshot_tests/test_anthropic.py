@@ -1,5 +1,6 @@
 """Snapshot tests for Anthropic chat provider."""
 
+import asyncio
 import json
 
 import pytest
@@ -1137,6 +1138,40 @@ async def test_anthropic_with_parallel_tool_calls_enabled():
             pass
         body = json.loads(mock.calls.last.request.content.decode())
         assert "tool_choice" not in body
+
+
+def test_anthropic_across_event_loops_is_silent():
+    """Closing a provider from a different event loop must not raise."""
+
+    async def _make():
+        return Anthropic(
+            model="claude-sonnet-4-20250514",
+            api_key="test-key",
+            default_max_tokens=1024,
+            stream=False,
+        )
+
+    provider = asyncio.run(_make())
+
+    async def _aclose():
+        await provider.aclose()
+
+    asyncio.run(_aclose())
+
+
+def test_anthropic_sync_close_across_event_loops_is_silent():
+    """The sync close() helper must not emit unawaited-coroutine warnings."""
+
+    async def _make():
+        return Anthropic(
+            model="claude-sonnet-4-20250514",
+            api_key="test-key",
+            default_max_tokens=1024,
+            stream=False,
+        )
+
+    provider = asyncio.run(_make())
+    provider.close()
 
 
 async def test_anthropic_parallel_tool_calls_last_call_wins():

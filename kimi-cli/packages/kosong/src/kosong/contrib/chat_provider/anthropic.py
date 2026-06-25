@@ -11,7 +11,6 @@ import contextlib
 import json
 import orjson
 import re
-import traceback
 from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal, Self, TypedDict, Unpack, cast
 
@@ -134,11 +133,9 @@ async def _drain_awaitable(awaitable: Awaitable[object]) -> None:
     except RuntimeError as exc:
         # On Windows/Python 3.14, closing an httpx.AsyncClient whose
         # underlying transports were bound to a now-closed ProactorEventLoop
-        # raises RuntimeError('Event loop is closed').  Print the traceback
-        # so we can see exactly where it originates, then swallow it — the OS
-        # will reclaim the socket.
+        # raises RuntimeError('Event loop is closed').  Swallow it silently —
+        # the OS will reclaim the socket.
         if "Event loop is closed" in str(exc):
-            traceback.print_exc()
             return
         raise
     except Exception:
@@ -303,6 +300,14 @@ class Anthropic:
             "max_tokens": default_max_tokens,
             "beta_features": ["interleaved-thinking-2025-05-14"],
         }
+        # Remember the event loop this provider was created on.  Closing the
+        # underlying httpx client from a different (or already-closed) loop on
+        # Windows/Python 3.14 raises a noisy RuntimeError; when the loop has
+        # changed, we simply abandon the client and let the OS reclaim sockets.
+        try:
+            self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
 
     @property
     def model_name(self) -> str:
@@ -500,15 +505,19 @@ class Anthropic:
 
         Safe to call multiple times; subsequent calls are no-ops.
         """
+        running_loop = asyncio.get_running_loop()
+        if running_loop.is_closed() or (
+            self._loop is not None and running_loop is not self._loop
+        ):
+            # The client was bound to a different (or already-closed) event loop.
+            # Abandon it silently; the OS will reclaim the sockets.
+            return
         try:
             await self._client.close()
         except RuntimeError as exc:
-            # Print the traceback for the harmless "Event loop is closed" error
-            # so its origin is visible during debugging, then swallow it.
             if "Event loop is closed" in str(exc):
-                traceback.print_exc()
-            else:
-                raise
+                return
+            raise
         except asyncio.CancelledError:
             # Cancelled during close (e.g. event-loop shutdown).
             # Swallow silently — the OS will reclaim the sockets.
@@ -523,16 +532,20 @@ class Anthropic:
         client is abandoned because there is no loop left to drain it.
         """
         try:
-            result = self._client.close()
-        except Exception:
-            return
-        try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             # No event loop running.  The client's original loop is gone, so
             # creating a new loop to close it will fail for transports bound
             # to the old loop.  Abandon the client — the OS will clean up the
             # sockets on process exit.
+            return
+        if self._loop is not None and loop is not self._loop:
+            # The running loop is not the one this client was bound to; closing
+            # from here would raise RuntimeError('Event loop is closed').
+            return
+        try:
+            result = self._client.close()
+        except Exception:
             return
         try:
             task = loop.create_task(_drain_awaitable(cast(Awaitable[object], result)))

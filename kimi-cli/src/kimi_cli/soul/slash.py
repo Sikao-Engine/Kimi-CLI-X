@@ -14,8 +14,7 @@ from kimi_cli import logger
 from kimi_cli.soul import wire_send
 from kimi_cli.soul.agent import load_agents_md
 from kimi_cli.soul.context import Context
-from kimi_cli.soul.dynamic_injections.afk_mode import AFK_DISABLED_REMINDER
-from kimi_cli.soul.message import system, system_reminder
+from kimi_cli.soul.message import system
 from kimi_cli.utils.export import is_sensitive_file
 from kimi_cli.utils.path import sanitize_cli_path, shorten_home
 from kimi_cli.utils.slashcmd import SlashCommandRegistry
@@ -125,9 +124,6 @@ async def afk(soul: KimiSoul, args: str):
     if soul.runtime.approval.is_afk():
         soul.runtime.approval.set_afk(False)
         await soul.notify_afk_changed(False)
-        await soul.context.append_message(
-            Message(role="user", content=[system_reminder(AFK_DISABLED_REMINDER)])
-        )
         if soul.runtime.approval.is_yolo_flag():
             wire_send(
                 TextPart(

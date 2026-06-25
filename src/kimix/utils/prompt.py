@@ -407,7 +407,8 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
 
         reminder = (
             "read the following requirement carefully and generate a comprehensive plan. "
-            "Save the complete plan to a file using the WritePlan tool. "
+            "call `TodoList` to set up the implementation steps, then save the complete plan "
+            "to a file using the WritePlan tool. "
             f"Requirement:\n{requirement.strip()}"
         )
 

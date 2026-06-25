@@ -146,9 +146,16 @@ class LoopControl(BaseModel):
     """When true, inject a system-reminder to verify pending todos with the
     TodoList tool whenever the model's text output contains completion keywords
     such as 'done' or 'finished'. Default is true."""
-    done_reminder_cooldown_steps: int = Field(default=1, ge=1)
+    done_reminder_cooldown_steps: int = Field(default=5, ge=1)
     """Minimum number of steps between consecutive done-reminder injections.
-    Default is 1."""
+    Default is 5."""
+    resilience_reminder_enabled: bool = Field(default=True)
+    """When true, inject a system-reminder to keep trying whenever the model's
+    text or thinking output contains resignation/give-up language.
+    Default is true."""
+    resilience_reminder_cooldown_steps: int = Field(default=20, ge=1)
+    """Minimum number of steps between consecutive resilience-reminder injections.
+    Default is 20."""
     auto_retrieve_history: bool = Field(default=True)
     """When true, automatically search archived conversation history before each
     turn and inject the most relevant past turn if it exceeds the similarity
@@ -284,13 +291,6 @@ class Config(BaseModel):
     default_model: str = Field(default="", description="Default model to use")
     default_thinking: bool = Field(default=False, description="Default thinking mode")
     default_yolo: bool = Field(default=False, description="Default yolo (auto-approve) mode")
-    skip_afk_prompt_injection: bool = Field(
-        default=True,
-        description=(
-            "If true, suppress the afk-mode system reminder. "
-            "Yolo mode does not inject a system reminder."
-        ),
-    )
     default_editor: str = Field(
         default="",
         description="Default external editor command (e.g. 'vim', 'code --wait')",

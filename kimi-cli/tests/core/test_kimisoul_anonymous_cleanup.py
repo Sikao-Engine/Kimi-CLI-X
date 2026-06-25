@@ -21,15 +21,13 @@ def test_sync_cleanup_anonymous_removes_all_cache_files(tmp_path: Path) -> None:
     context_file.write_text("context")
 
     KimiSoul._sync_cleanup(
-        rotated_paths=files,
+        compact_cache_paths=files,
         file_backend=context_file,
         anonymous=True,
-        compact_cache_dir=cache_dir,
     )
 
     for f in files:
         assert not f.exists()
-    assert not cache_dir.exists()
     assert not context_file.exists()
 
 
@@ -44,21 +42,19 @@ def test_sync_cleanup_non_anonymous_does_nothing(tmp_path: Path) -> None:
     context_file.write_text("context")
 
     KimiSoul._sync_cleanup(
-        rotated_paths=files,
+        compact_cache_paths=files,
         file_backend=context_file,
         anonymous=False,
-        compact_cache_dir=cache_dir,
     )
 
     for f in files:
         assert f.exists()
-    assert cache_dir.exists()
     assert context_file.exists()
 
 
 @pytest.mark.asyncio
-async def test_close_anonymous_removes_session_cache_dir(tmp_path: Path) -> None:
-    """close() must remove the per-session cache directory for anonymous sessions."""
+async def test_close_anonymous_removes_session_cache_files(tmp_path: Path) -> None:
+    """close() must remove the pre-compact export files and context file for anonymous sessions."""
     soul = object.__new__(KimiSoul)
 
     cache_dir = tmp_path / ".kimix_cache" / "session-1"
@@ -71,8 +67,7 @@ async def test_close_anonymous_removes_session_cache_dir(tmp_path: Path) -> None
     context_file.write_text("context")
 
     soul._anonymous = True
-    soul._rotated_paths = export_files[:]
-    soul._compact_cache_dir = cache_dir
+    soul._compact_cache_dir = export_files[:]
     soul._context = MagicMock()
     soul._context.file_backend = context_file
     soul._history_index = MagicMock()
@@ -84,6 +79,5 @@ async def test_close_anonymous_removes_session_cache_dir(tmp_path: Path) -> None
 
     for f in export_files:
         assert not f.exists()
-    assert not cache_dir.exists()
     assert not context_file.exists()
     soul._finalizer.detach.assert_called_once_with()

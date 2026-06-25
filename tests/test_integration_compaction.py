@@ -138,7 +138,7 @@ class TestIntegrationCompaction:
         compactor = SimpleCompaction(max_preserved_messages=2)
 
         balanced = compactor.prepare(msgs, options=CompactionOptions(mode=CompactMode.BALANCED))
-        assert "Compaction Style Guidance" not in balanced.compact_message.content[-1].text
+        assert "Be balanced" in balanced.compact_message.content[-1].text
 
         aggressive = compactor.prepare(msgs, options=CompactionOptions(mode=CompactMode.AGGRESSIVE))
         assert "Be aggressive" in aggressive.compact_message.content[-1].text

@@ -14,10 +14,11 @@ from kimi_agent_sdk._session import Session
 class _FakeChatProvider:
     closed: bool = False
     raise_on_close: bool = False
+    close_error_message: str = "boom"
 
     async def aclose(self) -> None:
         if self.raise_on_close:
-            raise RuntimeError("boom")
+            raise RuntimeError(self.close_error_message)
         self.closed = True
 
 
@@ -99,11 +100,23 @@ async def test_close_calls_chat_provider_aclose() -> None:
 
 
 @pytest.mark.asyncio
-async def test_close_swallows_chat_provider_aclose_errors() -> None:
+async def test_close_swallows_event_loop_closed_error() -> None:
+    provider = _FakeChatProvider(
+        raise_on_close=True,
+        close_error_message="Event loop is closed",
+    )
+    session = _make_session(provider)
+    # Should not raise for the specific event-loop-closed cleanup error.
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_close_re_raises_other_chat_provider_aclose_errors() -> None:
     provider = _FakeChatProvider(raise_on_close=True)
     session = _make_session(provider)
-    # Should not raise despite the provider's aclose raising.
-    await session.close()
+    # RuntimeErrors other than "Event loop is closed" should propagate.
+    with pytest.raises(RuntimeError, match="boom"):
+        await session.close()
 
 
 @pytest.mark.asyncio

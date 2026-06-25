@@ -991,7 +991,7 @@ from kosong.message import Message
 
 @dataclass(frozen=True, slots=True)
 class DynamicInjection:
-    type: str      # identifier, e.g. "afk_mode", "compact_reminder", "done_reminder"
+    type: str      # identifier, e.g. "compact_reminder", "done_reminder"
     content: str   # plain text; will be wrapped in <system-reminder> tags
 
 class DynamicInjectionProvider(ABC):
@@ -1032,13 +1032,16 @@ class KimiSoul:
     def __init__(self, agent: Agent, *, context: Context, anonymous: bool = False):
         ...
         self._injection_providers: list[DynamicInjectionProvider] = [
-            AfkModeInjectionProvider() if not config.skip_afk_prompt_injection else [],
             CompactReminderProvider(threshold=loop_control.compact_reminder_threshold)
                 if loop_control.compact_reminder_enabled else [],
             DoneReminderProvider(
                 enabled=True,
                 cooldown_steps=loop_control.done_reminder_cooldown_steps,
             ) if loop_control.done_reminder_enabled else [],
+            ResilienceReminderProvider(
+                enabled=True,
+                cooldown_steps=loop_control.resilience_reminder_cooldown_steps,
+            ) if loop_control.resilience_reminder_enabled else [],
         ]
 
     def add_injection_provider(self, provider: DynamicInjectionProvider) -> None:
@@ -1060,9 +1063,9 @@ Built-in providers are registered in `__init__` according to `Config` / `LoopCon
 
 | Provider | File | Type | Purpose | Config knobs |
 |----------|------|------|---------|--------------|
-| `AfkModeInjectionProvider` | `dynamic_injections/afk_mode.py` | `afk_mode` | Instructs the model not to ask the user questions while afk, and to finish end-to-end. | `Config.skip_afk_prompt_injection` |
 | `CompactReminderProvider` | `dynamic_injections/compact_reminder.py` | `compact_reminder` | Suggests calling `Compact` when context usage exceeds a threshold. | `LoopControl.compact_reminder_enabled`, `compact_reminder_threshold` |
 | `DoneReminderProvider` | `dynamic_injections/done_reminder.py` | `done_reminder` | Detects completion language in the latest assistant `TextPart`s and reminds the model to call `TodoList` before concluding. | `LoopControl.done_reminder_enabled`, `done_reminder_cooldown_steps` |
+| `ResilienceReminderProvider` | `dynamic_injections/resilience_reminder.py` | `resilience_reminder` | Detects resignation/give-up language in assistant text/thinking and reminds the model to keep trying alternatives. | `LoopControl.resilience_reminder_enabled`, `resilience_reminder_cooldown_steps` |
 
 All three providers skip subagent sessions and reset their throttling state in `on_context_compacted()` and/or `on_afk_changed()`.
 

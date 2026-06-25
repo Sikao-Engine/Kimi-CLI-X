@@ -5,7 +5,12 @@ from kosong.chat_provider import TokenUsage
 from kosong.message import AudioURLPart, ImageURLPart, Message, VideoURLPart
 
 import kimi_cli.prompts as prompts
-from kimi_cli.soul.compaction import CompactionResult, SimpleCompaction, should_auto_compact
+from kimi_cli.soul.compaction import (
+    CompactionResult,
+    SimpleCompaction,
+    should_auto_compact,
+)
+from kimi_cli.soul.compaction import CompactMode, _MODE_GUIDANCE
 from kimi_cli.wire.types import TextPart, ThinkPart
 
 
@@ -64,7 +69,7 @@ def test_prepare_builds_compact_message_and_preserves_tail():
                 TextPart(text="Old question"),
                 TextPart(text="## Message 2\nRole: assistant\nContent:\n"),
                 TextPart(text="Old answer"),
-                TextPart(text="\n" + prompts.COMPACT),
+                TextPart(text="\n" + prompts.COMPACT + "\n\n" + _MODE_GUIDANCE[CompactMode.BALANCED]),
             ],
         )
     )
@@ -165,7 +170,7 @@ def test_prepare_without_custom_instruction_unchanged():
     parts = result.compact_message.content
     last_part = parts[-1]
     assert isinstance(last_part, TextPart)
-    assert last_part.text == "\n" + prompts.COMPACT
+    assert last_part.text == "\n" + prompts.COMPACT + "\n\n" + _MODE_GUIDANCE[CompactMode.BALANCED]
 
 
 # --- should_auto_compact tests ---
