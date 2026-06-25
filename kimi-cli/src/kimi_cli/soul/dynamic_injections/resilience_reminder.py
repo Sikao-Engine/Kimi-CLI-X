@@ -22,9 +22,9 @@ _RESILIENCE_REMINDER_TEMPLATE = (
 # assistant's latest output.  Each pattern is matched case-insensitively.
 _GIVE_UP_PATTERNS: list[re.Pattern[str]] = [
     # Explicit defeat
-    re.compile(r"\bgiv(?:ing\s+up|e\s+up)\b", re.IGNORECASE),
-    re.compile(r"\b(?:this\s+)?(?:can'?t|cannot)\s+be\s+(?:done|expressed|implemented|fixed|addressed|resolved)\b", re.IGNORECASE),
-    re.compile(r"\b(?:can'?t|cannot)\s+(?:fix|address|resolve)\b", re.IGNORECASE),
+    re.compile(r"\bgiv(?:ing\s+up|e\s+up|es\s+up|en\s+up)\b", re.IGNORECASE),
+    re.compile(r"\b(?:this\s+)?(?:can'?t|cannot)\s+be\s+(?:done|expressed|implemented|fixed|addressed|resolved|solved)\b", re.IGNORECASE),
+    re.compile(r"\b(?:can'?t|cannot)\s+(?:fix|address|resolve|solve)\b", re.IGNORECASE),
     re.compile(r"\b(?:not\s+possible|impossible|intractable|irreconcilable|insurmountable)\b", re.IGNORECASE),
     re.compile(r"\bno\s+viable\s+(?:approach|solution)\b", re.IGNORECASE),
     re.compile(r"\b(?:architectural|fundamental)\s+limitation(?:s)?\b", re.IGNORECASE),
@@ -50,7 +50,7 @@ _GIVE_UP_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bnot\s+(?:my|our)\s+responsibility\b", re.IGNORECASE),
     re.compile(r"\b(?:upstream|third-party)\s+(?:issue|limitation)\b", re.IGNORECASE),
     re.compile(r"\bexternal\s+dependency\b", re.IGNORECASE),
-    re.compile(r"\b(?:blocked\s+(?:by|on)|waiting\s+for|depends\s+on)\b", re.IGNORECASE),
+    re.compile(r"\b(?:blocked\s+(?:by|on)|waiting\s+for)\b", re.IGNORECASE),
     # Abandonment framing
     re.compile(r"\b(?:I\s+think\s+)?(?:we\s+should|let'?s|it\s+is\s+time\s+to)\s+stop\b", re.IGNORECASE),
     re.compile(r"\bcall\s+it\s+(?:done|complete)\b", re.IGNORECASE),
@@ -136,6 +136,5 @@ class ResilienceReminderProvider(DynamicInjectionProvider):
 
     async def on_afk_changed(self, enabled: bool) -> None:
         """Reset throttling when afk mode changes."""
-        _ = enabled
         self._last_injected_step = None
         self._last_injected_assistant_index = -1
