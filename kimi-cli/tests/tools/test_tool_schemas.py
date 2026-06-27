@@ -106,6 +106,7 @@ def test_todo_list_params_schema(todo_list_tool: TodoList):
     """Test the schema of TodoList tool parameters."""
     assert todo_list_tool.base.parameters == snapshot(
         {
+            "additionalProperties": False,
             "properties": {
                 "todos": {
                     "anyOf": [
@@ -113,7 +114,9 @@ def test_todo_list_params_schema(todo_list_tool: TodoList):
                             "items": {
                                 "properties": {
                                     "title": {
-                                        "description": "Title", "maxLength": 65536, "minLength": 1,
+                                        "description": "Title",
+                                        "maxLength": 65536,
+                                        "minLength": 1,
                                         "type": "string",
                                     },
                                     "status": {
@@ -121,32 +124,177 @@ def test_todo_list_params_schema(todo_list_tool: TodoList):
                                         "enum": ["pending", "in_progress", "done"],
                                         "type": "string",
                                     },
+                                    "priority": {
+                                        "anyOf": [
+                                            {"enum": ["low", "medium", "high"], "type": "string"},
+                                            {"type": "null"},
+                                        ],
+                                        "default": None,
+                                        "description": "Optional priority: low, medium, or high.",
+                                    },
+                                    "tags": {
+                                        "anyOf": [
+                                            {"items": {"type": "string"}, "type": "array"},
+                                            {"type": "null"},
+                                        ],
+                                        "default": None,
+                                        "description": "Optional list of tags.",
+                                    },
+                                    "notes": {
+                                        "anyOf": [
+                                            {"maxLength": 65536, "type": "string"},
+                                            {"type": "null"},
+                                        ],
+                                        "default": None,
+                                        "description": "Optional notes.",
+                                    },
+                                    "created_at": {
+                                        "anyOf": [{"type": "number"}, {"type": "null"}],
+                                        "default": None,
+                                        "description": "Optional creation timestamp (Unix epoch).",
+                                    },
+                                    "updated_at": {
+                                        "anyOf": [{"type": "number"}, {"type": "null"}],
+                                        "default": None,
+                                        "description": "Optional last-update timestamp (Unix epoch).",
+                                    },
                                 },
                                 "required": ["title", "status"],
                                 "type": "object",
                             },
                             "type": "array",
                         },
-                        {"properties": {
-    "title": {"description": "Title", "maxLength": 65536, "minLength": 1, "type": "string"},
-    "status": {
-        "description": "Status",
-        "enum": ["pending", "in_progress", "done"],
-        "type": "string",
-    },
-}, "required": ["title", "status"], "type": "object"}, {"type": "null"}],
+                        {
+                            "properties": {
+                                "title": {
+                                    "description": "Title",
+                                    "maxLength": 65536,
+                                    "minLength": 1,
+                                    "type": "string",
+                                },
+                                "status": {
+                                    "description": "Status",
+                                    "enum": ["pending", "in_progress", "done"],
+                                    "type": "string",
+                                },
+                                "priority": {
+                                    "anyOf": [
+                                        {"enum": ["low", "medium", "high"], "type": "string"},
+                                        {"type": "null"},
+                                    ],
+                                    "default": None,
+                                    "description": "Optional priority: low, medium, or high.",
+                                },
+                                "tags": {
+                                    "anyOf": [
+                                        {"items": {"type": "string"}, "type": "array"},
+                                        {"type": "null"},
+                                    ],
+                                    "default": None,
+                                    "description": "Optional list of tags.",
+                                },
+                                "notes": {
+                                    "anyOf": [
+                                        {"maxLength": 65536, "type": "string"},
+                                        {"type": "null"},
+                                    ],
+                                    "default": None,
+                                    "description": "Optional notes.",
+                                },
+                                "created_at": {
+                                    "anyOf": [{"type": "number"}, {"type": "null"}],
+                                    "default": None,
+                                    "description": "Optional creation timestamp (Unix epoch).",
+                                },
+                                "updated_at": {
+                                    "anyOf": [{"type": "number"}, {"type": "null"}],
+                                    "default": None,
+                                    "description": "Optional last-update timestamp (Unix epoch).",
+                                },
+                            },
+                            "required": ["title", "status"],
+                            "type": "object",
+                        },
+                        {"type": "null"},
+                    ],
                     "default": None,
                     "description": "Updated list, a single Todo item, or omit to return current list unchanged.",
-                }, "mode": {
-    "default": "append",
-    "description": "Write mode: 'overwrite' replaces the existing todo list; 'append' merges the provided todos into the existing list.",
-    "enum": ["overwrite", "append"],
-    "type": "string",
-}, "force": {
-    "default": False,
-    "description": "If true, bypass the requirement that all existing todos must be done before overwrite mode replaces the list.",
-    "type": "boolean",
-}},
+                },
+                "mode": {
+                    "default": "append",
+                    "description": "Write mode: 'overwrite' safely replaces the existing todo list only when all old todos are done; 'append' merges the provided todos into the existing list (existing titles are updated, new titles are appended); 'force_overwrite' replaces the existing todo list unconditionally.",
+                    "enum": ["overwrite", "append", "force_overwrite"],
+                    "type": "string",
+                },
+                "delete": {
+                    "anyOf": [
+                        {"items": {"type": "string"}, "type": "array"},
+                        {"type": "string"},
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                    "description": "Remove todos by exact title. Accepts a single title or a list of titles.",
+                },
+                "reorder": {
+                    "anyOf": [{"items": {"type": "string"}, "type": "array"}, {"type": "null"}],
+                    "default": None,
+                    "description": "Reorder existing todos by listing every title in the desired order.",
+                },
+                "status_filter": {
+                    "anyOf": [
+                        {
+                            "items": {"enum": ["pending", "in_progress", "done"], "type": "string"},
+                            "type": "array",
+                        },
+                        {"enum": ["pending", "in_progress", "done"], "type": "string"},
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                    "description": "Filter read output by status(es).",
+                },
+                "search": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "description": "Fuzzy search todo titles when reading.",
+                },
+                "limit": {
+                    "anyOf": [{"minimum": 0, "type": "integer"}, {"type": "null"}],
+                    "default": None,
+                    "description": "Limit the number of todos returned when reading.",
+                },
+                "offset": {
+                    "anyOf": [{"minimum": 0, "type": "integer"}, {"type": "null"}],
+                    "default": None,
+                    "description": "Offset into the read results.",
+                },
+                "mark_all": {
+                    "anyOf": [
+                        {"enum": ["pending", "in_progress", "done"], "type": "string"},
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                    "description": "Transition all existing todos to the given status.",
+                },
+                "mark_matching": {
+                    "anyOf": [
+                        {
+                            "additionalProperties": {
+                                "enum": ["pending", "in_progress", "done"],
+                                "type": "string",
+                            },
+                            "type": "object",
+                        },
+                        {"type": "null"},
+                    ],
+                    "default": None,
+                    "description": "Transition todos whose titles contain each key (case-insensitive) to the corresponding status.",
+                },
+                "archive_done": {
+                    "default": False,
+                    "description": "Move completed todos to a separate archive list.",
+                    "type": "boolean",
+                },
+            },
             "type": "object",
         }
     )
@@ -273,17 +421,20 @@ def test_read_file_params_schema(read_file_tool: ReadFile):
                     "description": "Lines to read, max 1000.",
                     "minimum": 1,
                     "type": "integer",
-                }, "max_char": {
-    "default": 65536,
-    "description": "Maximum number of characters to return.",
-    "minimum": 0,
-    "type": "integer",
-}, "char_offset": {
-    "default": 0,
-    "description": "Character offset to start returning from.",
-    "minimum": 0,
-    "type": "integer",
-}},
+                },
+                "max_char": {
+                    "default": 65536,
+                    "description": "Maximum number of characters to return.",
+                    "minimum": 0,
+                    "type": "integer",
+                },
+                "char_offset": {
+                    "default": 0,
+                    "description": "Character offset to start returning from.",
+                    "minimum": 0,
+                    "type": "integer",
+                },
+            },
             "required": ["path"],
             "type": "object",
         }
@@ -364,7 +515,9 @@ def test_grep_params_schema(grep_tool: Grep):
                 },
                 "output_mode": {
                     "default": "files_with_matches",
-                    "description": "Output format: 'files_with_matches', 'count_matches', or 'content'.", 'enum': ['files_with_matches', 'count_matches', 'content'], "type": "string",
+                    "description": "Output format: 'files_with_matches', 'count_matches', or 'content'.",
+                    "enum": ["files_with_matches", "count_matches", "content"],
+                    "type": "string",
                 },
                 "-B": {
                     "anyOf": [{"type": "integer"}, {"type": "null"}],
@@ -448,7 +601,8 @@ def test_write_file_params_schema(write_file_tool: WriteFile):
                     "description": "Write mode: overwrite or append.",
                     "enum": ["overwrite", "append"],
                     "type": "string",
-                }},
+                },
+            },
             "required": ["path", "content"],
             "type": "object",
         }
@@ -509,7 +663,8 @@ def test_edit_file_params_schema(edit_file_tool: EditFile):
                         },
                     ],
                     "description": "One or more edits.",
-                }},
+                },
+            },
             "required": ["path", "edit"],
             "type": "object",
         }

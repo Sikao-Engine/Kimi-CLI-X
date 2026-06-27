@@ -9,6 +9,12 @@ from pydantic import BaseModel, Field, ValidationError
 from kimi_cli.utils.io import atomic_json_write
 from kimi_cli.utils.logging import logger
 
+# Shared status type — single source of truth for valid todo statuses
+TodoStatus = Literal["pending", "in_progress", "done"]
+
+# Shared priority type for todos
+TodoPriority = Literal["low", "medium", "high"]
+
 STATE_FILE_NAME = "state.json"
 
 
@@ -22,7 +28,12 @@ class TodoItemState(BaseModel):
     """A single todo item stored in session or subagent state."""
 
     title: str
-    status: Literal["pending", "in_progress", "done"]
+    status: TodoStatus
+    priority: TodoPriority | None = None
+    tags: list[str] | None = None
+    notes: str | None = None
+    created_at: float | None = None
+    updated_at: float | None = None
 
 
 class SessionState(BaseModel):
@@ -39,6 +50,7 @@ class SessionState(BaseModel):
     auto_archive_exempt: bool = False
     # Todo list state
     todos: list[TodoItemState] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+    archived_todos: list[TodoItemState] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
 
 
 _LEGACY_METADATA_FILENAME = "metadata.json"

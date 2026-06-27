@@ -8,7 +8,7 @@ import pytest
 from kosong.tooling import ToolReturnValue
 
 from kimi_cli.soul.agent import Runtime
-from kimi_cli.tools.todo import Params, Todo, TodoList
+from kimi_cli.tools.todo import MergeResult, Params, Todo, TodoList
 
 
 @pytest.fixture
@@ -74,13 +74,9 @@ class TestTodoListOutputNotEmpty:
 
     async def test_default_mode_is_append(self, todo_list_tool: TodoList):
         """Calling Params(todos=[...]) without mode should merge (append behavior)."""
-        await todo_list_tool(
-            Params(todos=[Todo(title="Old task", status="pending")])
-        )
+        await todo_list_tool(Params(todos=[Todo(title="Old task", status="pending")]))
 
-        result = await todo_list_tool(
-            Params(todos=[Todo(title="Old task", status="done")])
-        )
+        result = await todo_list_tool(Params(todos=[Todo(title="Old task", status="done")]))
         assert not result.is_error
         assert "mode='overwrite'" not in result.message
 
@@ -89,9 +85,7 @@ class TestTodoListOutputNotEmpty:
 
     async def test_explicit_append_mode_merges(self, todo_list_tool: TodoList):
         """Calling Params(todos=[...], mode='append') should merge into existing list."""
-        await todo_list_tool(
-            Params(todos=[Todo(title="Old task", status="pending")])
-        )
+        await todo_list_tool(Params(todos=[Todo(title="Old task", status="pending")]))
 
         result = await todo_list_tool(
             Params(todos=[Todo(title="Old task", status="done")], mode="append")
@@ -102,20 +96,18 @@ class TestTodoListOutputNotEmpty:
         read = await todo_list_tool(Params(todos=None))
         assert "[done] Old task" in read.output
 
-    async def test_write_empty_list_clears_todos_when_overwrite(
-        self, todo_list_tool: TodoList
-    ):
-        """Passing an empty list [] with mode='overwrite' and force=True clears all todos."""
+    async def test_write_empty_list_clears_todos_when_overwrite(self, todo_list_tool: TodoList):
+        """Passing an empty list [] with mode='force_overwrite' clears all todos."""
         # Write some todos first
         write_params = Params(todos=[Todo(title="Task A", status="pending")])
         await todo_list_tool(write_params)
 
         # Clear with empty list + overwrite mode + force
-        clear_params = Params(todos=[], mode="overwrite", force=True)
+        clear_params = Params(todos=[], mode="force_overwrite")
         result = await todo_list_tool(clear_params)
         assert not result.is_error
         assert result.output == "Todo list updated"
-        assert "mode='overwrite' with force=True" in result.message
+        assert "mode='force_overwrite'" in result.message
 
         # Verify cleared
         read_params = Params(todos=None)
@@ -123,9 +115,7 @@ class TestTodoListOutputNotEmpty:
         assert isinstance(result.output, str)
         assert "empty" in result.output.lower() or result.output.strip() == "Todo list is empty."
 
-    async def test_write_empty_list_default_mode_errors(
-        self, todo_list_tool: TodoList
-    ):
+    async def test_write_empty_list_default_mode_errors(self, todo_list_tool: TodoList):
         """Passing an empty list [] with default mode (append) when old todos are
         not all done should return an error."""
         write_params = Params(todos=[Todo(title="Task A", status="pending")])
@@ -136,14 +126,14 @@ class TestTodoListOutputNotEmpty:
         assert result.is_error
         assert "Cannot clear todos" in result.output
 
-    async def test_overwrite_without_force_when_old_not_done_errors(
-        self, todo_list_tool: TodoList
-    ):
-        """mode='overwrite' without force=True when old todos are not all done errors."""
+    async def test_overwrite_without_force_when_old_not_done_errors(self, todo_list_tool: TodoList):
+        """mode='overwrite' when old todos are not all done errors."""
         write_params = Params(todos=[Todo(title="Task A", status="pending")])
         await todo_list_tool(write_params)
 
-        overwrite_params = Params(todos=[Todo(title="New task", status="pending")], mode="overwrite")
+        overwrite_params = Params(
+            todos=[Todo(title="New task", status="pending")], mode="overwrite"
+        )
         result = await todo_list_tool(overwrite_params)
         assert result.is_error
         assert "Cannot overwrite todos" in result.output
@@ -152,19 +142,19 @@ class TestTodoListOutputNotEmpty:
     async def test_overwrite_without_force_when_all_old_done_succeeds(
         self, todo_list_tool: TodoList
     ):
-        """mode='overwrite' without force=True succeeds when all old todos are done."""
+        """mode='overwrite' succeeds when all old todos are done."""
         write_params = Params(todos=[Todo(title="Task A", status="done")])
         await todo_list_tool(write_params)
 
-        overwrite_params = Params(todos=[Todo(title="New task", status="pending")], mode="overwrite")
+        overwrite_params = Params(
+            todos=[Todo(title="New task", status="pending")], mode="overwrite"
+        )
         result = await todo_list_tool(overwrite_params)
         assert not result.is_error
         assert "New task" in str(result.display)
         assert "Task A" not in str(result.display)
 
-    async def test_write_empty_list_when_all_done_clears(
-        self, todo_list_tool: TodoList
-    ):
+    async def test_write_empty_list_when_all_done_clears(self, todo_list_tool: TodoList):
         """Passing an empty list [] when all old todos are done should clear."""
         write_params = Params(todos=[Todo(title="Task A", status="done")])
         await todo_list_tool(write_params)
@@ -178,9 +168,7 @@ class TestTodoListOutputNotEmpty:
         result = await todo_list_tool(read_params)
         assert "empty" in result.output.lower()
 
-    async def test_root_todos_persisted_to_disk(
-        self, todo_list_tool: TodoList, runtime: Runtime
-    ):
+    async def test_root_todos_persisted_to_disk(self, todo_list_tool: TodoList, runtime: Runtime):
         """Write mode should persist todos to disk via SessionState."""
         from kimi_cli.session_state import load_session_state
 
@@ -220,9 +208,7 @@ class TestTodoListOutputNotEmpty:
 class TestTodoListActiveSummary:
     """Tests for the active-todo summary appended to successful writes."""
 
-    async def test_write_outputs_pending_and_in_progress_summary(
-        self, todo_list_tool: TodoList
-    ):
+    async def test_write_outputs_pending_and_in_progress_summary(self, todo_list_tool: TodoList):
         """Successful writes list pending and in_progress todos in output."""
         params = Params(
             todos=[
@@ -266,17 +252,15 @@ class TestTodoListActiveSummary:
         assert not result.is_error
         assert result.output == "Todo list updated"
 
-    async def test_write_summary_with_overwrite_warning(
-        self, todo_list_tool: TodoList
-    ):
-        """Warning from mode='overwrite' with force=True is in message; active summary is in output."""
+    async def test_write_summary_with_overwrite_warning(self, todo_list_tool: TodoList):
+        """Warning from mode='force_overwrite' is in message; active summary is in output."""
+        await todo_list_tool(Params(todos=[Todo(title="Old task", status="pending")]))
         params = Params(
             todos=[
                 Todo(title="Forced pending", status="pending"),
                 Todo(title="Forced in progress", status="in_progress"),
             ],
-            mode="overwrite",
-            force=True,
+            mode="force_overwrite",
         )
         result = await todo_list_tool(params)
         assert not result.is_error
@@ -284,11 +268,9 @@ class TestTodoListActiveSummary:
         assert "- [pending] Forced pending" in result.output
         assert "- [in progress] Forced in progress" in result.output
         assert "mode" not in result.output
-        assert "mode='overwrite' with force=True" in result.message
+        assert "mode='force_overwrite'" in result.message
 
-    async def test_write_summary_order_matches_persisted_order(
-        self, todo_list_tool: TodoList
-    ):
+    async def test_write_summary_order_matches_persisted_order(self, todo_list_tool: TodoList):
         """Active todos are listed in the exact order they appear after the write."""
         params = Params(
             todos=[
@@ -302,9 +284,7 @@ class TestTodoListActiveSummary:
         result = await todo_list_tool(params)
         assert not result.is_error
 
-        active_lines = [
-            line for line in result.output.splitlines() if line.startswith("- [")
-        ]
+        active_lines = [line for line in result.output.splitlines() if line.startswith("- [")]
         assert active_lines == [
             "- [pending] First",
             "- [in progress] Second",
@@ -427,11 +407,12 @@ class TestTodoListValidation:
         assert "exceeds maximum limit of 4096" in result.output
 
     async def test_overwrite_outputs_warning(self, todo_list_tool: TodoList):
-        """mode='overwrite' with force=True should include a warning in the message."""
-        params = Params(todos=[Todo(title="Task", status="pending")], mode="overwrite", force=True)
+        """mode='force_overwrite' should include a warning in the message."""
+        await todo_list_tool(Params(todos=[Todo(title="Old task", status="pending")]))
+        params = Params(todos=[Todo(title="Task", status="pending")], mode="force_overwrite")
         result = await todo_list_tool(params)
         assert not result.is_error
-        assert "mode='overwrite' with force=True" in result.message
+        assert "mode='force_overwrite'" in result.message
 
     async def test_status_regression_blocked(self, todo_list_tool: TodoList):
         """Changing a done todo back to pending/in_progress should be blocked."""
@@ -445,51 +426,39 @@ class TestTodoListValidation:
         assert result.is_error
         assert "Cannot regress completed todos" in result.output
 
-        # B should remain done
+        # No partial save on regression error: state stays as it was before the call
         read_result = await todo_list_tool(Params(todos=None))
         assert "[done] B" in read_result.output
-        assert "[done] A" in read_result.output
+        assert "[pending] A" in read_result.output
 
 
 class TestTodoListNewListValidation:
     """Test error behavior when new todos contain items not in the old list."""
 
-    async def test_new_todo_with_old_incomplete_returns_error(
-        self, todo_list_tool: TodoList
-    ):
-        """If old todos are not all done and new list has new titles, return error."""
-        await todo_list_tool(
-            Params(todos=[Todo(title="Old task", status="pending")])
-        )
+    async def test_new_todo_with_old_incomplete_appends(self, todo_list_tool: TodoList):
+        """Append mode adds brand-new titles to the end of the existing list."""
+        await todo_list_tool(Params(todos=[Todo(title="Old task", status="pending")]))
 
-        result = await todo_list_tool(
-            Params(todos=[Todo(title="New task", status="pending")])
-        )
-        assert result.is_error
-        assert "Cannot replace with new todos" in result.output
-        assert "Old task" in result.output
+        result = await todo_list_tool(Params(todos=[Todo(title="New task", status="pending")]))
+        assert not result.is_error
 
-    async def test_new_todo_when_all_old_done_is_allowed(
-        self, todo_list_tool: TodoList
-    ):
-        """If all old todos are done, new list with new titles is allowed."""
-        await todo_list_tool(
-            Params(todos=[Todo(title="Old task", status="done")])
-        )
+        read_result = await todo_list_tool(Params(todos=None))
+        assert "[pending] Old task" in read_result.output
+        assert "[pending] New task" in read_result.output
 
-        result = await todo_list_tool(
-            Params(todos=[Todo(title="New task", status="pending")])
-        )
+    async def test_new_todo_when_all_old_done_appends(self, todo_list_tool: TodoList):
+        """Append mode keeps existing done items and appends new titles."""
+        await todo_list_tool(Params(todos=[Todo(title="Old task", status="done")]))
+
+        result = await todo_list_tool(Params(todos=[Todo(title="New task", status="pending")]))
         assert not result.is_error
 
         read_result = await todo_list_tool(Params(todos=None))
         assert "New task" in read_result.output
-        assert "Old task" not in read_result.output
+        assert "Old task" in read_result.output
 
-    async def test_overwrite_bypasses_validation(
-        self, todo_list_tool: TodoList
-    ):
-        """mode='overwrite' with force=True should bypass the incomplete-todo check."""
+    async def test_overwrite_bypasses_validation(self, todo_list_tool: TodoList):
+        """mode='force_overwrite' should bypass the incomplete-todo check."""
         await todo_list_tool(
             Params(
                 todos=[
@@ -502,8 +471,7 @@ class TestTodoListNewListValidation:
         result = await todo_list_tool(
             Params(
                 todos=[Todo(title="New task", status="done")],
-                mode="overwrite",
-                force=True,
+                mode="force_overwrite",
             )
         )
         assert not result.is_error
@@ -512,13 +480,9 @@ class TestTodoListNewListValidation:
         assert "New task" in read_result.output
         assert "Old task" not in read_result.output
 
-    async def test_new_todo_mixed_with_old_titles_merges(
-        self, todo_list_tool: TodoList
-    ):
+    async def test_new_todo_mixed_with_old_titles_merges(self, todo_list_tool: TodoList):
         """Overlapping titles merge instead of erroring."""
-        await todo_list_tool(
-            Params(todos=[Todo(title="Keep me", status="pending")])
-        )
+        await todo_list_tool(Params(todos=[Todo(title="Keep me", status="pending")]))
 
         result = await todo_list_tool(
             Params(
@@ -532,9 +496,7 @@ class TestTodoListNewListValidation:
         assert "Keep me" in str(result.display)
         assert "Brand new" in str(result.display)
 
-    async def test_subset_update_does_not_error(
-        self, todo_list_tool: TodoList
-    ):
+    async def test_subset_update_does_not_error(self, todo_list_tool: TodoList):
         """A strict subset of old titles should always succeed (incremental update)."""
         await todo_list_tool(
             Params(
@@ -548,29 +510,19 @@ class TestTodoListNewListValidation:
         result = await todo_list_tool(Params(todos=[Todo(title="A", status="done")]))
         assert not result.is_error
 
-    async def test_new_todo_when_old_empty_succeeds(
-        self, todo_list_tool: TodoList
-    ):
+    async def test_new_todo_when_old_empty_succeeds(self, todo_list_tool: TodoList):
         """Writing new todos when old list is empty should never error."""
-        result = await todo_list_tool(
-            Params(todos=[Todo(title="New task", status="pending")])
-        )
+        result = await todo_list_tool(Params(todos=[Todo(title="New task", status="pending")]))
         assert not result.is_error
 
-    async def test_clear_when_old_empty_succeeds(
-        self, todo_list_tool: TodoList
-    ):
+    async def test_clear_when_old_empty_succeeds(self, todo_list_tool: TodoList):
         """Writing an empty list when old list is empty should succeed."""
         result = await todo_list_tool(Params(todos=[]))
         assert not result.is_error
 
-    async def test_single_todo_when_old_empty_succeeds(
-        self, todo_list_tool: TodoList
-    ):
+    async def test_single_todo_when_old_empty_succeeds(self, todo_list_tool: TodoList):
         """Writing a single Todo when old list is empty should succeed."""
-        result = await todo_list_tool(
-            Params(todos=Todo(title="Only task", status="in_progress"))
-        )
+        result = await todo_list_tool(Params(todos=Todo(title="Only task", status="in_progress")))
         assert not result.is_error
 
 
@@ -722,8 +674,8 @@ class TestTodoListSubagent:
         assert "[done] Sub A" in read_result.output
         assert "[pending] Sub B" in read_result.output
 
-    async def test_subagent_new_list_with_incomplete_errors(self, runtime: Runtime):
-        """New list validation should work in subagent context."""
+    async def test_subagent_new_list_with_incomplete_appends(self, runtime: Runtime):
+        """Append mode in subagent context appends brand-new titles."""
         subagent_runtime = runtime.copy_for_subagent(
             agent_id="test-sub-err",
             subagent_type="coder",
@@ -735,90 +687,83 @@ class TestTodoListSubagent:
         await tool(Params(todos=[Todo(title="Sub task", status="in_progress")]))
 
         result = await tool(Params(todos=[Todo(title="New sub task", status="pending")]))
-        assert result.is_error
-        assert "Cannot replace with new todos" in result.output
+        assert not result.is_error
+
+        read_result = await tool(Params(todos=None))
+        assert "Sub task" in read_result.output
+        assert "New sub task" in read_result.output
 
 
 # --- Additional comprehensive tests ---
 
 
 class TestTodoListFuzzyMatching:
-    """Test fuzzy title matching in error messages."""
+    """Test fuzzy title matching and non-blocking warnings."""
 
-    async def test_new_todo_typo_suggests_nearest_title(
-        self, todo_list_tool: TodoList
-    ):
-        """A typo in a new todo title should warn about the nearest existing title."""
-        await todo_list_tool(
-            Params(todos=[Todo(title="Implement feature", status="pending")])
-        )
+    async def test_new_todo_typo_returns_nonblocking_warning(self, todo_list_tool: TodoList):
+        """A typo in a new todo title warns but still appends the new title."""
+        await todo_list_tool(Params(todos=[Todo(title="Implement feature", status="pending")]))
 
         result = await todo_list_tool(
             Params(todos=[Todo(title="Implement featuer", status="pending")])
         )
-        assert result.is_error
-        assert "Warning" in result.output
-        assert "Implement featuer" in result.output
-        assert "Implement feature" in result.output
-        assert "looks like existing" in result.output
+        assert not result.is_error
+        assert "looks like existing" in result.message
+        assert "Implement featuer" in result.message
+        assert "Implement feature" in result.message
 
-    async def test_new_todo_no_match_does_not_crash(
-        self, todo_list_tool: TodoList
-    ):
-        """A completely unrelated title should still error without crashing."""
+        read = await todo_list_tool(Params(todos=None))
+        assert "[pending] Implement feature" in read.output
+        assert "[pending] Implement featuer" in read.output
+
+    async def test_new_todo_no_match_appends_without_warning(self, todo_list_tool: TodoList):
+        """A completely unrelated title appends cleanly with no warning."""
         await todo_list_tool(Params(todos=[Todo(title="Old task", status="pending")]))
 
         result = await todo_list_tool(
             Params(todos=[Todo(title="Completely unrelated", status="pending")])
         )
-        assert result.is_error
-        assert isinstance(result.output, str)
-        assert result.output
-        assert isinstance(result.message, str)
-        assert result.message
+        assert not result.is_error
+        assert "looks like existing" not in result.message
+
+        read = await todo_list_tool(Params(todos=None))
+        assert "[pending] Old task" in read.output
+        assert "[pending] Completely unrelated" in read.output
 
     def test_find_nearest_titles_helper_directly(self):
         """_find_nearest_titles should return nearest string matches."""
-        nearest = TodoList._find_nearest_titles(
-            ["foo bar"], ["foo baz", "qux"], top_k=1
-        )
+        nearest = TodoList._find_nearest_titles(["foo bar"], ["foo baz", "qux"], top_k=1)
         assert "foo bar" in nearest
         assert len(nearest["foo bar"]) == 1
-        assert nearest["foo bar"][0][0] == "foo baz"
+        assert nearest["foo bar"][0].choice == "foo baz"
 
         empty_candidates = TodoList._find_nearest_titles(["foo"], [], top_k=1)
         assert empty_candidates == {"foo": []}
 
     def test_find_nearest_titles_exact_match(self):
         """An exact title should match itself."""
-        nearest = TodoList._find_nearest_titles(
-            ["exact title"], ["exact title", "other"], top_k=1
-        )
-        assert nearest["exact title"][0][0] == "exact title"
-        assert nearest["exact title"][0][1] == 100.0
+        nearest = TodoList._find_nearest_titles(["exact title"], ["exact title", "other"], top_k=1)
+        assert nearest["exact title"][0].choice == "exact title"
+        assert nearest["exact title"][0].score == 100.0
 
     def test_find_nearest_titles_typo(self):
         """A minor typo should return the correct title."""
         nearest = TodoList._find_nearest_titles(
             ["Implement featuer"], ["Implement feature", "Write tests"], top_k=1
         )
-        assert nearest["Implement featuer"][0][0] == "Implement feature"
-        assert nearest["Implement featuer"][0][1] >= 60.0
+        assert nearest["Implement featuer"][0].choice == "Implement feature"
+        assert nearest["Implement featuer"][0].score >= 60.0
 
     def test_find_nearest_titles_unrelated_returns_empty(self):
         """A completely unrelated title should return no suggestions."""
-        nearest = TodoList._find_nearest_titles(
-            ["Completely unrelated"], ["Old task"], top_k=1
-        )
+        nearest = TodoList._find_nearest_titles(["Completely unrelated"], ["Old task"], top_k=1)
         assert nearest["Completely unrelated"] == []
 
     def test_find_nearest_titles_word_reorder(self):
         """Reordered words with the same vocabulary still match."""
-        nearest = TodoList._find_nearest_titles(
-            ["bug fix"], ["fix bug", "write tests"], top_k=1
-        )
-        assert nearest["bug fix"][0][0] == "fix bug"
-        assert nearest["bug fix"][0][1] >= 60.0
+        nearest = TodoList._find_nearest_titles(["bug fix"], ["fix bug", "write tests"], top_k=1)
+        assert nearest["bug fix"][0].choice == "fix bug"
+        assert nearest["bug fix"][0].score >= 60.0
 
     def test_find_nearest_titles_processor_and_cutoff(self):
         """Optional processor and score_cutoff parameters are respected."""
@@ -829,8 +774,8 @@ class TestTodoListFuzzyMatching:
             score_cutoff=85.0,
             processor=str.lower,
         )
-        assert nearest["UPPER CASE"][0][0] == "upper case"
-        assert nearest["UPPER CASE"][0][1] == 100.0
+        assert nearest["UPPER CASE"][0].choice == "upper case"
+        assert nearest["UPPER CASE"][0].score == 100.0
 
         # With a strict cutoff, a case-only difference should not match without
         # the processor, but the processor makes it match.
@@ -843,7 +788,7 @@ class TestTodoListFuzzyMatching:
         assert no_processor["UPPER CASE"] == []
 
     async def test_fuzzy_suggestions_in_subagent_context(self, runtime: Runtime):
-        """Fuzzy warnings should work when TodoList runs in a subagent."""
+        """Fuzzy warnings work as non-blocking messages in a subagent."""
         subagent_runtime = runtime.copy_for_subagent(
             agent_id="test-sub-fuzzy",
             subagent_type="coder",
@@ -855,72 +800,67 @@ class TestTodoListFuzzyMatching:
         await tool(Params(todos=[Todo(title="Sub task", status="in_progress")]))
 
         result = await tool(Params(todos=[Todo(title="Sub taks", status="pending")]))
-        assert result.is_error
-        assert "Warning" in result.output
-        assert "Sub taks" in result.output
-        assert "Sub task" in result.output
-        assert "looks like existing" in result.output
+        assert not result.is_error
+        assert "looks like existing" in result.message
+        assert "Sub taks" in result.message
+        assert "Sub task" in result.message
+
+        read = await tool(Params(todos=None))
+        assert "[in_progress] Sub task" in read.output
+        assert "[pending] Sub taks" in read.output
 
 
 class TestTodoListFuzzyAppendWarning:
-    """Test fuzzy near-match warnings in append mode."""
+    """Test fuzzy near-match warnings in append mode are non-blocking."""
 
     async def test_typo_in_append_mode_returns_warning(self, todo_list_tool: TodoList):
-        """A minor typo should return a warning and leave state unchanged."""
-        await todo_list_tool(
-            Params(todos=[Todo(title="Implement feature", status="pending")])
-        )
+        """A minor typo warns, but the exact original stays and the typo is appended."""
+        await todo_list_tool(Params(todos=[Todo(title="Implement feature", status="pending")]))
 
         result = await todo_list_tool(
             Params(todos=[Todo(title="Implement featuer", status="done")])
         )
-        assert result.is_error
-        assert "Warning" in result.output
-        assert "Implement featuer" in result.output
-        assert "Implement feature" in result.output
-        assert "looks like existing" in result.output
+        assert not result.is_error
+        assert "looks like existing" in result.message
+        assert "Implement featuer" in result.message
+        assert "Implement feature" in result.message
 
-        # State must remain unchanged
         read = await todo_list_tool(Params(todos=None))
         assert "[pending] Implement feature" in read.output
-        assert "featuer" not in read.output
+        assert "[done] Implement featuer" in read.output
 
     async def test_word_reorder_returns_warning(self, todo_list_tool: TodoList):
-        """Reordered words matching an existing title should warn."""
-        await todo_list_tool(
-            Params(todos=[Todo(title="Fix bug", status="pending")])
-        )
+        """Reordered words matching an existing title warn but still append."""
+        await todo_list_tool(Params(todos=[Todo(title="Fix bug", status="pending")]))
 
-        result = await todo_list_tool(
-            Params(todos=[Todo(title="Bug fix", status="done")])
-        )
-        assert result.is_error
-        assert "Warning" in result.output
-        assert "Bug fix" in result.output
-        assert "Fix bug" in result.output
+        result = await todo_list_tool(Params(todos=[Todo(title="Bug fix", status="done")]))
+        assert not result.is_error
+        assert "looks like existing" in result.message
+        assert "Bug fix" in result.message
+        assert "Fix bug" in result.message
 
         read = await todo_list_tool(Params(todos=None))
         assert "[pending] Fix bug" in read.output
+        assert "[done] Bug fix" in read.output
 
     async def test_case_only_difference_returns_warning(self, todo_list_tool: TodoList):
-        """A case-only difference should warn (case-insensitive scoring)."""
-        await todo_list_tool(
-            Params(todos=[Todo(title="Implement Feature", status="pending")])
-        )
+        """A case-only difference warns but appends the new-cased title."""
+        await todo_list_tool(Params(todos=[Todo(title="Implement Feature", status="pending")]))
 
         result = await todo_list_tool(
             Params(todos=[Todo(title="implement feature", status="done")])
         )
-        assert result.is_error
-        assert "Warning" in result.output
-        assert "implement feature" in result.output
-        assert "Implement Feature" in result.output
+        assert not result.is_error
+        assert "looks like existing" in result.message
+        assert "implement feature" in result.message
+        assert "Implement Feature" in result.message
 
         read = await todo_list_tool(Params(todos=None))
         assert "[pending] Implement Feature" in read.output
+        assert "[done] implement feature" in read.output
 
     async def test_mixed_exact_and_fuzzy_returns_warning(self, todo_list_tool: TodoList):
-        """A mix of exact and fuzzy matches should warn without partial updates."""
+        """Exact matches update; fuzzy near-matches append with a warning."""
         await todo_list_tool(
             Params(
                 todos=[
@@ -938,29 +878,29 @@ class TestTodoListFuzzyAppendWarning:
                 ]
             )
         )
-        assert result.is_error
-        assert "Warning" in result.output
-        assert "Fuzzy macth" in result.output
-        assert "Fuzzy match" in result.output
+        assert not result.is_error
+        assert "looks like existing" in result.message
+        assert "Fuzzy macth" in result.message
+        assert "Fuzzy match" in result.message
 
-        # Neither the exact nor the fuzzy update should be persisted
         read = await todo_list_tool(Params(todos=None))
-        assert "[pending] Exact match" in read.output
+        assert "[done] Exact match" in read.output
         assert "[pending] Fuzzy match" in read.output
-        assert "[done] Exact match" not in read.output
+        assert "[done] Fuzzy macth" in read.output
 
-    async def test_unrelated_title_still_errors(self, todo_list_tool: TodoList):
-        """A clearly unrelated title should still produce the replace-blocking error."""
-        await todo_list_tool(
-            Params(todos=[Todo(title="Old task", status="pending")])
-        )
+    async def test_unrelated_title_appends_cleanly(self, todo_list_tool: TodoList):
+        """A clearly unrelated title appends without any warning."""
+        await todo_list_tool(Params(todos=[Todo(title="Old task", status="pending")]))
 
         result = await todo_list_tool(
             Params(todos=[Todo(title="Completely unrelated", status="pending")])
         )
-        assert result.is_error
-        assert "Cannot replace with new todos" in result.output
-        assert "Old task" in result.output
+        assert not result.is_error
+        assert "looks like existing" not in result.message
+
+        read = await todo_list_tool(Params(todos=None))
+        assert "[pending] Old task" in read.output
+        assert "[pending] Completely unrelated" in read.output
 
 
 class TestTodoModel:
@@ -992,7 +932,7 @@ class TestTodoListInternals:
     """Test internal helper methods directly."""
 
     def test_find_duplicate_titles(self):
-        """_find_duplicate_titles returns first duplicate or None."""
+        """_find_duplicate_titles returns all duplicates or None."""
         from kimi_cli.tools.todo import TodoList
 
         assert TodoList._find_duplicate_titles([]) is None
@@ -1003,16 +943,21 @@ class TestTodoListInternals:
             )
             is None
         )
-        assert (
-            TodoList._find_duplicate_titles(
-                [
-                    Todo(title="A", status="pending"),
-                    Todo(title="B", status="done"),
-                    Todo(title="A", status="in_progress"),
-                ]
-            )
-            == "A"
-        )
+        assert TodoList._find_duplicate_titles(
+            [
+                Todo(title="A", status="pending"),
+                Todo(title="B", status="done"),
+                Todo(title="A", status="in_progress"),
+            ]
+        ) == ["A"]
+        assert TodoList._find_duplicate_titles(
+            [
+                Todo(title="A", status="pending"),
+                Todo(title="B", status="done"),
+                Todo(title="A", status="in_progress"),
+                Todo(title="B", status="pending"),
+            ]
+        ) == ["A", "B"]
 
     def test_merge_todos_empty_old(self):
         """_merge_todos with empty old returns new."""
@@ -1020,27 +965,29 @@ class TestTodoListInternals:
 
         tool = object.__new__(TodoList)
         result = tool._merge_todos([], [Todo(title="A", status="pending")])
-        assert isinstance(result, list)
-        assert len(result) == 1
-        assert result[0].title == "A"
+        assert result.error is None
+        assert result.todos is not None
+        assert len(result.todos) == 1
+        assert result.todos[0].title == "A"
 
     def test_merge_todos_empty_new_when_all_done(self):
-        """_merge_todos with empty new and all old done returns empty."""
+        """_merge_todos with explicit empty new and all old done returns empty."""
         from kimi_cli.tools.todo import TodoList
 
         tool = object.__new__(TodoList)
-        result = tool._merge_todos([Todo(title="A", status="done")], [])
-        assert isinstance(result, list)
-        assert len(result) == 0
+        result = tool._merge_todos([Todo(title="A", status="done")], [], clear_requested=True)
+        assert result.error is None
+        assert result.todos is not None
+        assert len(result.todos) == 0
 
     def test_merge_todos_empty_new_when_not_done_errors(self):
-        """_merge_todos with empty new and incomplete old returns error."""
+        """_merge_todos with explicit empty new and incomplete old returns error."""
         from kimi_cli.tools.todo import TodoList
 
         tool = object.__new__(TodoList)
-        result = tool._merge_todos([Todo(title="A", status="pending")], [])
-        assert isinstance(result, ToolReturnValue)
-        assert result.is_error
+        result = tool._merge_todos([Todo(title="A", status="pending")], [], clear_requested=True)
+        assert result.error is not None
+        assert result.error.is_error
 
     def test_merge_todos_superset_when_all_done(self):
         """_merge_todos with superset titles when all old done returns new."""
@@ -1051,8 +998,9 @@ class TestTodoListInternals:
             [Todo(title="A", status="done")],
             [Todo(title="A", status="pending"), Todo(title="B", status="pending")],
         )
-        assert isinstance(result, list)
-        assert len(result) == 2
+        assert result.error is None
+        assert result.todos is not None
+        assert len(result.todos) == 2
 
     def test_read_subagent_state_non_dict(self):
         """_read_subagent_state handles non-JSON and non-dict data."""
@@ -1080,7 +1028,7 @@ class TestTodoListRegression:
     """Test edge cases around status regression and overwrite mode."""
 
     async def test_regression_allowed_with_overwrite(self, todo_list_tool: TodoList):
-        """mode='overwrite' with force=True allows regressing done todos."""
+        """mode='force_overwrite' allows regressing done todos."""
         await todo_list_tool(
             Params(todos=[Todo(title="A", status="pending"), Todo(title="B", status="done")])
         )
@@ -1088,12 +1036,11 @@ class TestTodoListRegression:
         result = await todo_list_tool(
             Params(
                 todos=[Todo(title="A", status="done"), Todo(title="B", status="pending")],
-                mode="overwrite",
-                force=True,
+                mode="force_overwrite",
             )
         )
         assert not result.is_error
-        assert "mode='overwrite' with force=True" in result.message
+        assert "mode='force_overwrite'" in result.message
 
         read = await todo_list_tool(Params(todos=None))
         assert "[pending] B" in read.output
@@ -1175,9 +1122,9 @@ class TestTodoListRegression:
             Params(todos=[Todo(title="A", status="done"), Todo(title="B", status="done")])
         )
 
-        # Replace with new list
+        # Replace with new list using overwrite (all old todos are done)
         result = await todo_list_tool(
-            Params(todos=[Todo(title="C", status="pending")])
+            Params(todos=[Todo(title="C", status="pending")], mode="overwrite")
         )
         assert not result.is_error
 
@@ -1185,3 +1132,417 @@ class TestTodoListRegression:
         assert "C" in read.output
         assert "A" not in read.output
         assert "B" not in read.output
+
+
+class TestTodoListForceOverwriteMode:
+    """Test the force_overwrite write mode and its synonyms."""
+
+    async def test_force_overwrite_replaces_incomplete_todos(self, todo_list_tool: TodoList):
+        await todo_list_tool(Params(todos=[Todo(title="Old task", status="pending")]))
+        result = await todo_list_tool(
+            Params(todos=[Todo(title="New task", status="done")], mode="force_overwrite")
+        )
+        assert not result.is_error
+        assert "mode='force_overwrite'" in result.message
+        read = await todo_list_tool(Params(todos=None))
+        assert "New task" in read.output
+        assert "Old task" not in read.output
+
+    async def test_force_overwrite_synonym_force(self, todo_list_tool: TodoList):
+        await todo_list_tool(Params(todos=[Todo(title="Old task", status="pending")]))
+        result = await todo_list_tool(
+            Params(todos=[Todo(title="New task", status="done")], mode="force")
+        )
+        assert not result.is_error
+        read = await todo_list_tool(Params(todos=None))
+        assert "New task" in read.output
+        assert "Old task" not in read.output
+
+    async def test_force_overwrite_synonym_force_overwrite(self, todo_list_tool: TodoList):
+        await todo_list_tool(Params(todos=[Todo(title="Old task", status="pending")]))
+        result = await todo_list_tool(
+            Params(todos=[Todo(title="New task", status="done")], mode="force overwrite")
+        )
+        assert not result.is_error
+        read = await todo_list_tool(Params(todos=None))
+        assert "New task" in read.output
+
+    async def test_force_overwrite_on_empty_list_no_warning(self, todo_list_tool: TodoList):
+        """When the existing todo list is empty, force_overwrite should not warn."""
+        result = await todo_list_tool(
+            Params(todos=[Todo(title="New task", status="pending")], mode="force_overwrite")
+        )
+        assert not result.is_error
+        assert "force_overwrite" not in result.message
+        assert result.message == "Todo list updated."
+
+    async def test_force_param_rejected(self, todo_list_tool: TodoList):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Params(todos=[Todo(title="Task", status="pending")], mode="overwrite", force=True)
+
+
+class TestTodoListDelete:
+    """Test explicit todo deletion."""
+
+    async def test_delete_single_title(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(
+                todos=[Todo(title="Keep", status="pending"), Todo(title="Drop", status="pending")]
+            )
+        )
+
+        result = await todo_list_tool(Params(delete="Drop"))
+        assert not result.is_error
+
+        read = await todo_list_tool(Params(todos=None))
+        assert "Keep" in read.output
+        assert "Drop" not in read.output
+
+    async def test_delete_list_of_titles(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(title="A", status="pending"),
+                    Todo(title="B", status="pending"),
+                    Todo(title="C", status="pending"),
+                ]
+            )
+        )
+
+        result = await todo_list_tool(Params(delete=["A", "C"]))
+        assert not result.is_error
+
+        read = await todo_list_tool(Params(todos=None))
+        assert "- [pending] A" not in read.output
+        assert "- [pending] B" in read.output
+        assert "- [pending] C" not in read.output
+
+    async def test_delete_not_found_warns(self, todo_list_tool: TodoList):
+        await todo_list_tool(Params(todos=[Todo(title="A", status="pending")]))
+
+        result = await todo_list_tool(Params(delete="Missing"))
+        assert not result.is_error
+        assert "not found" in result.message
+
+    async def test_delete_while_appending(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(
+                todos=[Todo(title="Old", status="pending"), Todo(title="Drop", status="pending")]
+            )
+        )
+
+        result = await todo_list_tool(
+            Params(todos=[Todo(title="New", status="pending")], delete=["Drop"])
+        )
+        assert not result.is_error
+
+        read = await todo_list_tool(Params(todos=None))
+        assert "Old" in read.output
+        assert "New" in read.output
+        assert "Drop" not in read.output
+
+
+class TestTodoListReorder:
+    """Test explicit todo reordering."""
+
+    async def test_reorder_changes_order(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(title="First", status="pending"),
+                    Todo(title="Second", status="pending"),
+                    Todo(title="Third", status="pending"),
+                ]
+            )
+        )
+
+        result = await todo_list_tool(Params(reorder=["Third", "First", "Second"]))
+        assert not result.is_error
+
+        read = await todo_list_tool(Params(todos=None))
+        lines = read.output.splitlines()
+        assert lines[1] == "- [pending] Third"
+        assert lines[2] == "- [pending] First"
+        assert lines[3] == "- [pending] Second"
+
+    async def test_reorder_missing_title_errors(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(todos=[Todo(title="A", status="pending"), Todo(title="B", status="pending")])
+        )
+
+        result = await todo_list_tool(Params(reorder=["A", "B", "C"]))
+        assert result.is_error
+        assert "reorder list does not match" in result.output
+
+    async def test_reorder_extra_title_errors(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(todos=[Todo(title="A", status="pending"), Todo(title="B", status="pending")])
+        )
+
+        result = await todo_list_tool(Params(reorder=["A"]))
+        assert result.is_error
+        assert "reorder list does not match" in result.output
+
+
+class TestTodoListMetadata:
+    """Test todo metadata fields (priority, tags, notes, timestamps)."""
+
+    async def test_metadata_persisted(self, todo_list_tool: TodoList):
+        result = await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(
+                        title="Meta task",
+                        status="pending",
+                        priority="high",
+                        tags=["core", "urgent"],
+                        notes="Important context",
+                    )
+                ]
+            )
+        )
+        assert not result.is_error
+        assert result.display[0].items[0].priority == "high"
+        assert result.display[0].items[0].tags == ["core", "urgent"]
+        assert result.display[0].items[0].notes == "Important context"
+        assert result.display[0].items[0].created_at is not None
+        assert result.display[0].items[0].updated_at is not None
+
+    async def test_metadata_preserved_on_status_update(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(
+                        title="Meta task",
+                        status="pending",
+                        priority="medium",
+                        tags=["keep"],
+                        notes="keep me",
+                    )
+                ]
+            )
+        )
+
+        result = await todo_list_tool(Params(todos=[Todo(title="Meta task", status="done")]))
+        assert not result.is_error
+        item = result.display[0].items[0]
+        assert item.status == "done"
+        assert item.priority == "medium"
+        assert item.tags == ["keep"]
+        assert item.notes == "keep me"
+
+    async def test_metadata_overridden_when_provided(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(
+                        title="Meta task",
+                        status="pending",
+                        priority="low",
+                        tags=["old"],
+                        notes="old note",
+                    )
+                ]
+            )
+        )
+
+        result = await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(
+                        title="Meta task",
+                        status="in_progress",
+                        priority="high",
+                        tags=["new"],
+                    )
+                ]
+            )
+        )
+        assert not result.is_error
+        item = result.display[0].items[0]
+        assert item.status == "in_progress"
+        assert item.priority == "high"
+        assert item.tags == ["new"]
+        assert item.notes == "old note"
+
+
+class TestTodoListReadFilters:
+    """Test read-mode filtering, search, and pagination."""
+
+    async def test_status_filter(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(title="A", status="pending"),
+                    Todo(title="B", status="in_progress"),
+                    Todo(title="C", status="done"),
+                ]
+            )
+        )
+
+        result = await todo_list_tool(Params(status_filter="done"))
+        assert not result.is_error
+        assert "C" in result.output
+        assert "A" not in result.output
+        assert "B" not in result.output
+
+    async def test_status_filter_list(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(title="A", status="pending"),
+                    Todo(title="B", status="in_progress"),
+                    Todo(title="C", status="done"),
+                ]
+            )
+        )
+
+        result = await todo_list_tool(Params(status_filter=["pending", "in_progress"]))
+        assert not result.is_error
+        assert "- [pending] A" in result.output
+        assert "- [in_progress] B" in result.output
+        assert "- [done] C" not in result.output
+
+    async def test_search_fuzzy(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(title="Fix login bug", status="pending"),
+                    Todo(title="Write tests", status="pending"),
+                    Todo(title="Deploy app", status="pending"),
+                ]
+            )
+        )
+
+        result = await todo_list_tool(Params(search="bug"))
+        assert not result.is_error
+        assert "Fix login bug" in result.output
+        assert "Write tests" not in result.output
+        assert "Deploy app" not in result.output
+
+    async def test_limit_and_offset(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(title="A", status="pending"),
+                    Todo(title="B", status="pending"),
+                    Todo(title="C", status="pending"),
+                    Todo(title="D", status="pending"),
+                ]
+            )
+        )
+
+        result = await todo_list_tool(Params(limit=2, offset=1))
+        assert not result.is_error
+        lines = [line for line in result.output.splitlines() if line.startswith("- [")]
+        assert lines == ["- [pending] B", "- [pending] C"]
+
+
+class TestTodoListBulkTransitions:
+    """Test mark_all and mark_matching parameters."""
+
+    async def test_mark_all(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(title="A", status="pending"),
+                    Todo(title="B", status="in_progress"),
+                ]
+            )
+        )
+
+        result = await todo_list_tool(Params(mark_all="done"))
+        assert not result.is_error
+
+        read = await todo_list_tool(Params(todos=None))
+        assert "[done] A" in read.output
+        assert "[done] B" in read.output
+
+    async def test_mark_matching(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(title="Fix login", status="pending"),
+                    Todo(title="Fix signup", status="pending"),
+                    Todo(title="Write docs", status="pending"),
+                ]
+            )
+        )
+
+        result = await todo_list_tool(Params(mark_matching={"fix": "done", "docs": "in_progress"}))
+        assert not result.is_error
+
+        read = await todo_list_tool(Params(todos=None))
+        assert "[done] Fix login" in read.output
+        assert "[done] Fix signup" in read.output
+        assert "[in_progress] Write docs" in read.output
+
+
+class TestTodoListArchive:
+    """Test archiving completed todos."""
+
+    async def test_archive_done_moves_completed(self, todo_list_tool: TodoList):
+        await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(title="Done task", status="done"),
+                    Todo(title="Active task", status="pending"),
+                ]
+            )
+        )
+
+        result = await todo_list_tool(Params(archive_done=True))
+        assert not result.is_error
+
+        read = await todo_list_tool(Params(todos=None))
+        assert "Active task" in read.output
+        assert "Done task" not in read.output
+        assert "Archived: 1 completed todo(s)" in read.output
+
+    async def test_archive_done_persists_to_session_state(
+        self, todo_list_tool: TodoList, runtime: Runtime
+    ):
+        await todo_list_tool(
+            Params(
+                todos=[
+                    Todo(title="Done task", status="done"),
+                    Todo(title="Active task", status="pending"),
+                ]
+            )
+        )
+
+        await todo_list_tool(Params(archive_done=True))
+        assert len(runtime.session.state.archived_todos) == 1
+        assert runtime.session.state.archived_todos[0].title == "Done task"
+        assert runtime.session.state.archived_todos[0].status == "done"
+
+
+class TestTodoListPydanticValidation:
+    """Test clearer Pydantic validation errors for malformed todos."""
+
+    async def test_invalid_status_in_list_shows_index(self, todo_list_tool: TodoList):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as exc_info:
+            Params(
+                todos=[
+                    Todo(title="A", status="pending"),
+                    {"title": "B", "status": "not_a_status"},
+                ]
+            )
+        assert "index 1" in str(exc_info.value)
+        assert "Invalid status" in str(exc_info.value)
+
+    async def test_invalid_priority_rejected(self, todo_list_tool: TodoList):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Params(todos=[{"title": "A", "status": "pending", "priority": "super_high"}])
+
+    async def test_delete_empty_string_rejected(self, todo_list_tool: TodoList):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Params(delete="   ")

@@ -23,21 +23,39 @@ _RESILIENCE_REMINDER_TEMPLATE = (
 _GIVE_UP_PATTERNS: list[re.Pattern[str]] = [
     # Explicit defeat
     re.compile(r"\bgiv(?:ing\s+up|e\s+up|es\s+up|en\s+up)\b", re.IGNORECASE),
-    re.compile(r"\b(?:this\s+)?(?:can'?t|cannot)\s+be\s+(?:done|expressed|implemented|fixed|addressed|resolved|solved)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:this\s+)?(?:can'?t|cannot)\s+be\s+(?:done|expressed|implemented|fixed|addressed|resolved|solved)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\b(?:can'?t|cannot)\s+(?:fix|address|resolve|solve)\b", re.IGNORECASE),
-    re.compile(r"\b(?:not\s+possible|impossible|intractable|irreconcilable|insurmountable)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:not\s+possible|impossible|intractable|irreconcilable|insurmountable)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\bno\s+viable\s+(?:approach|solution)\b", re.IGNORECASE),
     re.compile(r"\b(?:architectural|fundamental)\s+limitation(?:s)?\b", re.IGNORECASE),
-    re.compile(r"\brequire(?:s|d)?\s+(?:significant|inline)\s+(?:compiler\s+changes|SPIR-V)\b", re.IGNORECASE),
-    re.compile(r"\bnot\s+(?:feasible|workable|practical|realistic|worth\s+(?:the\s+)?effort|fixable)\b", re.IGNORECASE),
+    re.compile(
+        r"\brequire(?:s|d)?\s+(?:significant|inline)\s+(?:compiler\s+changes|SPIR-V)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bnot\s+(?:feasible|workable|practical|realistic|worth\s+(?:the\s+)?effort|fixable)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\b(?:won'?t|will\s+not)\s+fix\b", re.IGNORECASE),
     re.compile(r"\bunfixable\b", re.IGNORECASE),
     # Pragmatic resignation / documentation fallback
     re.compile(r"\bpragmatic(?:ally)?\b", re.IGNORECASE),
-    re.compile(r"\bdocument\s+(?:what\s+works\s+and\s+what\s+doesn'?t|the\s+limitation)\b", re.IGNORECASE),
+    re.compile(
+        r"\bdocument\s+(?:what\s+works\s+and\s+what\s+doesn'?t|the\s+limitation)\b", re.IGNORECASE
+    ),
     re.compile(r"\bstep\s+back\b", re.IGNORECASE),
-    re.compile(r"\bgiven\s+(?:the\s+time(?:\s+I'?ve\s+spent)?|the\s+(?:time|constraints))\b", re.IGNORECASE),
-    re.compile(r"\blet\s+me\s+(?:finalize|update\s+the\s+report\s+and\s+finalize)\b", re.IGNORECASE),
+    re.compile(
+        r"\bgiven\s+(?:the\s+time(?:\s+I'?ve\s+spent)?|the\s+(?:time|constraints))\b", re.IGNORECASE
+    ),
+    re.compile(
+        r"\blet\s+me\s+(?:finalize|update\s+the\s+report\s+and\s+finalize)\b", re.IGNORECASE
+    ),
     re.compile(r"\baccept\s+that\s+these\s+operations\s+can'?t\b", re.IGNORECASE),
     re.compile(r"\bthe\s+only\s+viable\s+approaches\s+are\b", re.IGNORECASE),
     re.compile(r"\bdiminishing\s+returns\b", re.IGNORECASE),
@@ -46,13 +64,18 @@ _GIVE_UP_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bpre[-\s]?existing\b", re.IGNORECASE),
     re.compile(r"\b(?:existing|legacy|inherited)\s+(?:limitation|issue|problem)\b", re.IGNORECASE),
     re.compile(r"\b(?:by\s+design|works\s+as\s+designed)\b", re.IGNORECASE),
-    re.compile(r"\b(?:out\s+of\s+scope|not\s+in\s+scope|beyond\s+the\s+scope|outside\s+the\s+scope)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:out\s+of\s+scope|not\s+in\s+scope|beyond\s+the\s+scope|outside\s+the\s+scope)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\bnot\s+(?:my|our)\s+responsibility\b", re.IGNORECASE),
     re.compile(r"\b(?:upstream|third-party)\s+(?:issue|limitation)\b", re.IGNORECASE),
     re.compile(r"\bexternal\s+dependency\b", re.IGNORECASE),
-    re.compile(r"\b(?:blocked\s+(?:by|on)|waiting\s+for)\b", re.IGNORECASE),
+    re.compile(r"\b(?:blocked\s+(?:by|on)|waiting\s+for|depends\s+on)\b", re.IGNORECASE),
     # Abandonment framing
-    re.compile(r"\b(?:I\s+think\s+)?(?:we\s+should|let'?s|it\s+is\s+time\s+to)\s+stop\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:I\s+think\s+)?(?:we\s+should|let'?s|it\s+is\s+time\s+to)\s+stop\b", re.IGNORECASE
+    ),
     re.compile(r"\bcall\s+it\s+(?:done|complete)\b", re.IGNORECASE),
     re.compile(r"\bdeclare\s+(?:victory|defeat)\b", re.IGNORECASE),
     re.compile(r"\bthrow\s+in\s+the\s+towel\b", re.IGNORECASE),
@@ -66,7 +89,9 @@ _GIVE_UP_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\b(?:there\s+(?:is|s)|there'?s)\s+no\s+way\b", re.IGNORECASE),
     re.compile(r"\bno\s+way\s+to\b", re.IGNORECASE),
     re.compile(r"\b(?:we\s+have\s+to|must)\s+accept\b", re.IGNORECASE),
-    re.compile(r"\b(?:this\s+is|I\s+realize\s+(?:this\s+approach\s+is)?)\s+problematic\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:this\s+is|I\s+realize\s+(?:this\s+approach\s+is)?)\s+problematic\b", re.IGNORECASE
+    ),
 ]
 
 
@@ -127,7 +152,9 @@ class ResilienceReminderProvider(DynamicInjectionProvider):
 
         self._last_injected_step = step_no
         self._last_injected_assistant_index = assistant_index
-        return [DynamicInjection(type=_RESILIENCE_REMINDER_TYPE, content=_RESILIENCE_REMINDER_TEMPLATE)]
+        return [
+            DynamicInjection(type=_RESILIENCE_REMINDER_TYPE, content=_RESILIENCE_REMINDER_TEMPLATE)
+        ]
 
     async def on_context_compacted(self) -> None:
         """Reset throttling so the reminder can fire again after compaction."""
