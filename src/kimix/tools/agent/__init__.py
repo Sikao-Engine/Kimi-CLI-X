@@ -249,7 +249,7 @@ class Agent(CallableTool2):
                         session=session,
                         output_function=output_function,
                         info_print=False,
-                        merge_wire_messages=True,
+                        merge_wire_messages=True, format_output=True
                     )
                 except Exception as e:
                     err_msg = str(e)

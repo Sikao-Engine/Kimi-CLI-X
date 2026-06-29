@@ -118,7 +118,7 @@ class Search(CallableTool2[IndexerParams]):
                                 prompt = f'Read the task from `{temp_path}` and search in `{dest_path_str}`.'
                             else:
                                 prompt = f'Search:\n```\n{params.prompt}\n```in `{dest_path_str}`'
-                            await utils.prompt_async(prompt_str=prompt, session=session, output_function=output_function, info_print=False, cancel_callable=cancel_callable, merge_wire_messages=True)
+                            await utils.prompt_async(prompt_str=prompt, session=session, output_function=output_function, info_print=False, cancel_callable=cancel_callable, merge_wire_messages=True, format_output=True)
                     except Exception as e:
                         err_msg_inner = str(e)
                     finally:
