@@ -1,5 +1,7 @@
 """PowerShell tool that executes commands via the system PowerShell executable."""
 
+import asyncio
+import contextlib
 import functools
 import os
 import shutil
@@ -222,7 +224,22 @@ class Powershell(CallableTool2[PowershellParams]):
         process_task = ProcessTask(executable, ["-NoP", "-NonI", "-Exec", "Bypass", "-NoL", "-C", "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;", cmd], None, None)
         task_id = await process_task.start(self._session, "pwsh")
 
-        await process_task.wait(params.timeout)
+        try:
+            await process_task.wait(params.timeout)
+        except asyncio.CancelledError:
+            # The tool call was cancelled (e.g. by a tool-level timeout or
+            # shutdown). Stop the subprocess and return a tool error so the
+            # conversation stream can continue.
+            with contextlib.suppress(asyncio.CancelledError):
+                await process_task.stop()
+            remove_task_id(self._session, task_id)
+            output = await process_task.stream.get_output() if process_task.stream else ""
+            transform_warning = transform_warning or ""
+            return ToolError(
+                output=output,
+                message=f"`{cmd}` was cancelled." + transform_warning,
+                brief="Command cancelled",
+            )
 
         if await process_task.thread_is_alive():
             output = await process_task.stream.get_output() if process_task.stream else ""

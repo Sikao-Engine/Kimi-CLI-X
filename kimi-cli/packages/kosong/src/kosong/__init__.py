@@ -78,7 +78,7 @@ from loguru import logger
 from kosong._generate import GenerateResult, generate
 from kosong.chat_provider import ChatProvider, ChatProviderError, StreamedMessagePart, TokenUsage
 from kosong.message import Message, ToolCall
-from kosong.tooling import ToolResult, ToolResultFuture, Toolset
+from kosong.tooling import ToolError, ToolResult, ToolResultFuture, Toolset
 from kosong.utils.aio import Callback
 
 # Explicitly import submodules
@@ -206,7 +206,23 @@ class StepResult:
             results: list[ToolResult] = []
             for tool_call in self.tool_calls:
                 future = self._tool_result_futures[tool_call.id]
-                result = await future
+                try:
+                    result = await future
+                except asyncio.CancelledError:
+                    # If the whole step is being cancelled, propagate that.
+                    if asyncio.current_task().cancelling():
+                        raise
+                    # Otherwise this is a tool-internal cancellation (e.g. a
+                    # timeout). Turn it into a tool error so the conversation
+                    # can continue instead of aborting the whole run.
+                    result = ToolResult(
+                        tool_call_id=tool_call.id,
+                        return_value=ToolError(
+                            output="",
+                            message=f"Tool `{tool_call.function.name}` was cancelled.",
+                            brief="Tool cancelled",
+                        ),
+                    )
                 results.append(result)
             return results
         finally:

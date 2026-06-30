@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections.abc import Callable, Coroutine
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -221,19 +220,46 @@ async def run_soul(
             logger.debug("Cancelling the run task")
             soul_task.cancel()
             try:
-                await soul_task
+                # Shield the await so that an outer task cancellation
+                # (e.g. asyncio.run() shutdown) does not interrupt us
+                # before the inner task has finished cancelling. After the
+                # shielded await returns, we can reliably tell whether the
+                # cancellation came from the inner task or from our own
+                # task being cancelled.
+                await asyncio.shield(soul_task)
             except asyncio.CancelledError:
-                raise RunCancelled from None
+                # If our own task is being cancelled, propagate the
+                # cancellation instead of converting it to RunCancelled.
+                # Converting it would make asyncio's shutdown logic report
+                # an unhandled exception.
+                if asyncio.current_task().cancelling():
+                    raise
+                # Inner task was cancelled by us; fall through to raise
+                # RunCancelled below.
+                pass
+            if asyncio.current_task().cancelling():
+                raise asyncio.CancelledError
+            raise RunCancelled from None
         else:
             assert soul_task.done()  # either stop event is set or the run task is done
             cancel_event_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await cancel_event_task
+            except asyncio.CancelledError:
+                # If our own task is being cancelled (e.g. during
+                # asyncio.run() shutdown), propagate it instead of swallowing
+                # it together with the expected cancel_event_task cancellation.
+                if asyncio.current_task().cancelling():
+                    raise
             soul_task.result()  # this will raise if any exception was raised in the run task
     finally:
         notification_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        try:
             await notification_task
+        except asyncio.CancelledError:
+            # Same as above: do not swallow an outer task cancellation.
+            if asyncio.current_task().cancelling():
+                raise
         try:
             await _deliver_notifications_to_wire_once(runtime, wire)
         except Exception:

@@ -1,6 +1,8 @@
 """Bash tool that executes commands via the system bash executable."""
 
 
+import asyncio
+import contextlib
 import functools
 import ntpath
 import os
@@ -601,7 +603,21 @@ class Bash(CallableTool2[BashParams]):
         process_task = ProcessTask(self._bash, ["-c", safe_cmd], None, None)
         task_id = await process_task.start(self._session, "bash")
 
-        await process_task.wait(params.timeout)
+        try:
+            await process_task.wait(params.timeout)
+        except asyncio.CancelledError:
+            # The tool call was cancelled (e.g. by a tool-level timeout or
+            # shutdown). Stop the subprocess and return a tool error so the
+            # conversation stream can continue.
+            with contextlib.suppress(asyncio.CancelledError):
+                await process_task.stop()
+            remove_task_id(self._session, task_id)
+            output = await process_task.stream.get_output() if process_task.stream else ""
+            return ToolError(
+                output=output,
+                message=f"`{params.cmd}` was cancelled.",
+                brief="Command cancelled",
+            )
 
         if await process_task.thread_is_alive():
             output = await process_task.stream.get_output() if process_task.stream else ""
