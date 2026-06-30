@@ -420,8 +420,7 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
 
         reminder = (
             "read the following requirement carefully and generate a comprehensive plan. "
-            "call `TodoList` to set up the implementation steps, then save the complete plan "
-            "to a file using the WritePlan tool. "
+            "save the complete plan to a file using the WritePlan tool. "
             f"Requirement:\n{requirement.strip()}"
         )
 
@@ -515,7 +514,6 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
                 "The user reviewed the plan and wants the following changes:\n\n"
                 f"{feedback.strip()}\n\n"
                 "Please update the plan file accordingly using the WritePlan or EditPlan tools. "
-                "After updating the plan, call `TodoList` to reflect the revised implementation steps."
             )
             try:
                 base._stream.colorful_print_word(
@@ -560,10 +558,10 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
         plan_size = len(plan_content.encode("utf-8"))
         regular_session = _create_default_session()
         if plan_size > 100 * 1024:
-            impl_prompt = f"Read the plan in `{plan_file}`, set up a todo list using `TodoList` with the implementation steps, then implement the plan."
+            impl_prompt = f"Read the plan in `{plan_file}`, implement the plan."
             review_reminder = f"Review the plan in `{plan_file}` and ensure all tasks are completed."
         else:
-            impl_prompt = f"Set up a todo list using `TodoList` with the implementation steps from the following plan, then implement the plan:\n\n{plan_content}"
+            impl_prompt = f"implement the plan:\n\n{plan_content}"
             review_reminder = f"Review this plan and ensure all tasks are completed:\n\n{plan_content}"
         await prompt_async(
             impl_prompt,
