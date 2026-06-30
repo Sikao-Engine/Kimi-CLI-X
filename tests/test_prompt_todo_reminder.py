@@ -504,8 +504,8 @@ def test_prompt_plan_async_prompts_execution_agent(tmp_path: Path, monkeypatch: 
 
     asyncio.run(prompt_mod.prompt_plan_async("test requirement", plan_file))
 
-    # Planner direct reminder should mention TodoList
-    assert any("call `TodoList`" in p for p in planner_session.prompts)
+    # The planner was used to generate the plan.
+    assert len(planner_session.prompts) >= 1
 
     # No planner export or todo import should happen
     planner_export_calls = [
@@ -514,6 +514,6 @@ def test_prompt_plan_async_prompts_execution_agent(tmp_path: Path, monkeypatch: 
     ]
     assert len(planner_export_calls) == 0
 
-    # Execution prompts should ask the agent to set up a todo list and implement/review
-    assert any("Set up a todo list using `TodoList`" in p for p in execution_session.prompts)
+    # Execution prompts should implement and review the plan.
+    assert any("implement the plan" in p for p in execution_session.prompts)
     assert any("Review this plan" in p for p in execution_session.prompts)

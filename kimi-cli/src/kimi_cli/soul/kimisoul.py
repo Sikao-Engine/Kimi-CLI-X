@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import random
 import secrets
 import time
 import uuid
@@ -23,7 +24,8 @@ from kosong.chat_provider import (
     RetryableChatProvider,
 )
 from kosong.message import Message
-from tenacity import RetryCallState, retry_if_exception, stop_after_attempt, wait_exponential_jitter
+from tenacity import RetryCallState, retry_if_exception, stop_after_attempt
+from tenacity.wait import wait_base
 
 from kimi_cli.approval_runtime import (
     ApprovalSource,
@@ -109,6 +111,49 @@ if TYPE_CHECKING:
 SKILL_COMMAND_PREFIX = "skill:"
 FLOW_COMMAND_PREFIX = "flow:"
 DEFAULT_MAX_FLOW_MOVES = 1000
+
+
+class _RateLimitAwareWait(wait_base):
+    """Tenacity wait callable that honors ``Retry-After`` for 429 responses."""
+
+    def __init__(
+        self,
+        *,
+        default_initial: float = 0.3,
+        default_max: float = 5.0,
+        default_jitter: float = 0.5,
+        rate_limit_initial: float = 1.0,
+        rate_limit_max: float = 30.0,
+        rate_limit_jitter: float = 1.0,
+        max_retry_after: float = 60.0,
+    ) -> None:
+        self.default_initial = default_initial
+        self.default_max = default_max
+        self.default_jitter = default_jitter
+        self.rate_limit_initial = rate_limit_initial
+        self.rate_limit_max = rate_limit_max
+        self.rate_limit_jitter = rate_limit_jitter
+        self.max_retry_after = max_retry_after
+
+    def __call__(self, retry_state: RetryCallState) -> float:
+        attempt = retry_state.attempt_number
+        exception = retry_state.outcome.exception() if retry_state.outcome else None
+        if isinstance(exception, APIStatusError) and exception.status_code == 429:
+            if exception.retry_after is not None:
+                return float(min(exception.retry_after, self.max_retry_after))
+            return min(
+                self.rate_limit_initial * (2 ** (attempt - 1))
+                + random.uniform(0, self.rate_limit_jitter),
+                self.rate_limit_max,
+            )
+        return min(
+            self.default_initial * (2 ** (attempt - 1))
+            + random.uniform(0, self.default_jitter),
+            self.default_max,
+        )
+
+
+_RETRY_WAIT = _RateLimitAwareWait()
 
 
 def classify_api_error(e: Exception) -> tuple[str, int | None]:
@@ -1175,7 +1220,7 @@ class KimiSoul:
         @tenacity.retry(
             retry=retry_if_exception(self._is_retryable_error),
             before_sleep=_before_step_retry_sleep,
-            wait=wait_exponential_jitter(initial=0.3, max=5, jitter=0.5),
+            wait=_RETRY_WAIT,
             stop=stop_after_attempt(max_attempts),
             reraise=True,
         )
@@ -1357,7 +1402,7 @@ class KimiSoul:
         @tenacity.retry(
             retry=retry_if_exception(self._is_retryable_error),
             before_sleep=_retry_log_compaction,
-            wait=wait_exponential_jitter(initial=0.3, max=5, jitter=0.5),
+            wait=_RETRY_WAIT,
             stop=stop_after_attempt(self._loop_control.max_retries_per_step),
             reraise=True,
         )

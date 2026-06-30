@@ -7,6 +7,7 @@ import pytest
 
 from kosong.chat_provider import (
     APIConnectionError,
+    APIStatusError,
     APITimeoutError,
     ChatProviderError,
     openai_common,
@@ -217,6 +218,26 @@ class TestConvertErrorBaseAPIError:
         # The key point: it should become ChatProviderError, not APIConnectionError.
         result = convert_error(err)
         assert type(result) is ChatProviderError
+
+    def test_api_status_error_preserves_response_headers(self) -> None:
+        """openai.APIStatusError must propagate response headers so the soul
+        layer can read ``Retry-After``."""
+        response = httpx.Response(
+            429,
+            request=_DUMMY_REQUEST,
+            headers={"retry-after": "7", "x-request-id": "req-openai"},
+        )
+        err = openai.APIStatusError(
+            response=response,
+            body={"error": {"message": "rate limited"}},
+            message="rate limited",
+        )
+        result = convert_error(err)
+        assert type(result) is APIStatusError
+        assert result.status_code == 429
+        assert result.request_id == "req-openai"
+        assert result.headers == response.headers
+        assert result.retry_after == 7
 
 
 # ---------------------------------------------------------------------------

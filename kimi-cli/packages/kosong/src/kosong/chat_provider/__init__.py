@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel
@@ -155,11 +155,34 @@ class APIStatusError(ChatProviderError):
 
     status_code: int
     request_id: str | None
+    headers: Mapping[str, str] | None
 
-    def __init__(self, status_code: int, message: str, *, request_id: str | None = None):
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        *,
+        request_id: str | None = None,
+        headers: Mapping[str, str] | None = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.request_id = request_id
+        self.headers = headers
+
+    @property
+    def retry_after(self) -> int | None:
+        """Return the ``Retry-After`` header value as an integer, if present."""
+        if self.headers is None:
+            return None
+        for key in ("retry-after", "Retry-After"):
+            value = self.headers.get(key)
+            if value is not None:
+                try:
+                    return int(value)
+                except ValueError:
+                    return None
+        return None
 
 
 class APIEmptyResponseError(ChatProviderError):
@@ -182,5 +205,10 @@ def convert_httpx_error(error: httpx.HTTPError) -> ChatProviderError:
         return APIConnectionError(str(error))
     if isinstance(error, httpx.HTTPStatusError):
         req_id = error.response.headers.get("x-request-id")
-        return APIStatusError(error.response.status_code, str(error), request_id=req_id)
+        return APIStatusError(
+            error.response.status_code,
+            str(error),
+            request_id=req_id,
+            headers=error.response.headers,
+        )
     return ChatProviderError(f"HTTP error: {error}")

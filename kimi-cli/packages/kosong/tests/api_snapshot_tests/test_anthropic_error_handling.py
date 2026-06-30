@@ -19,6 +19,9 @@ from anthropic import (
     APIConnectionError as AnthropicAPIConnectionError,
 )
 from anthropic import (
+    APIStatusError as AnthropicAPIStatusError,
+)
+from anthropic import (
     APITimeoutError as AnthropicAPITimeoutError,
 )
 
@@ -74,11 +77,18 @@ class TestConvertHttpxError:
         assert isinstance(convert_httpx_error(exc), expected_type)
 
     def test_http_status_error(self) -> None:
-        response = httpx.Response(502, request=httpx.Request("POST", "https://api.test"))
+        response = httpx.Response(
+            502,
+            request=httpx.Request("POST", "https://api.test"),
+            headers={"retry-after": "10", "x-request-id": "req-httpx"},
+        )
         exc = httpx.HTTPStatusError("bad gateway", request=response.request, response=response)
         err = convert_httpx_error(exc)
         assert isinstance(err, APIStatusError)
         assert err.status_code == 502
+        assert err.headers == response.headers
+        assert err.request_id == "req-httpx"
+        assert err.retry_after == 10
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +117,24 @@ class TestAnthropicConvertError:
 
         err = _convert_error(httpx.NetworkError("connection reset"))
         assert isinstance(err, APIConnectionError)
+
+    def test_api_status_error_preserves_response_headers(self) -> None:
+        """Anthropic APIStatusError must propagate response headers so the soul
+        layer can read ``Retry-After``."""
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(
+            429,
+            request=request,
+            headers={"retry-after": "3", "x-request-id": "req-anthropic"},
+        )
+        err = AnthropicAPIStatusError(
+            "rate limited", response=response, body=None
+        )
+        result = _convert_error(err)
+        assert type(result) is APIStatusError
+        assert result.status_code == 429
+        assert result.headers == response.headers
+        assert result.retry_after == 3
 
 
 # ---------------------------------------------------------------------------

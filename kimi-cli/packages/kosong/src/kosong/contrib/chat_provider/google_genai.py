@@ -9,7 +9,7 @@ except ModuleNotFoundError as exc:
 import base64
 import orjson
 import mimetypes
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Self, TypedDict, Unpack, cast
 
 import httpx
@@ -719,27 +719,44 @@ def message_to_google_genai(message: Message) -> Content:
     return Content(role=google_genai_role, parts=parts)
 
 
+def _response_headers(error: Exception) -> Mapping[str, str] | None:
+    """Best-effort extraction of response headers from a Google GenAI error."""
+    response = getattr(error, "response", None)
+    return getattr(response, "headers", None) if response is not None else None
+
+
 def _convert_error(error: Exception) -> ChatProviderError:
     """Convert a GoogleGenAI error to a Kosong chat provider error."""
     # Handle specific GoogleGenAI error types with detailed status code mapping
     if isinstance(error, genai_errors.ClientError):
         # 4xx client errors
         status_code = getattr(error, "code", 400)
+        headers = _response_headers(error)
         if status_code == 401:
-            return APIStatusError(401, f"Authentication failed: {error}")
+            return APIStatusError(
+                401, f"Authentication failed: {error}", headers=headers
+            )
         elif status_code == 403:
-            return APIStatusError(403, f"Permission denied: {error}")
+            return APIStatusError(
+                403, f"Permission denied: {error}", headers=headers
+            )
         elif status_code == 429:
-            return APIStatusError(429, f"Rate limit exceeded: {error}")
-        return APIStatusError(status_code, str(error))
+            return APIStatusError(
+                429, f"Rate limit exceeded: {error}", headers=headers
+            )
+        return APIStatusError(status_code, str(error), headers=headers)
     elif isinstance(error, genai_errors.ServerError):
         # 5xx server errors
         status_code = getattr(error, "code", 500)
-        return APIStatusError(status_code, f"Server error: {error}")
+        return APIStatusError(
+            status_code, f"Server error: {error}", headers=_response_headers(error)
+        )
     elif isinstance(error, genai_errors.APIError):
         # Generic API errors
         status_code = getattr(error, "code", 500)
-        return APIStatusError(status_code, str(error))
+        return APIStatusError(
+            status_code, str(error), headers=_response_headers(error)
+        )
     elif isinstance(error, TimeoutError):
         return APITimeoutError(f"Request timed out: {error}")
     else:

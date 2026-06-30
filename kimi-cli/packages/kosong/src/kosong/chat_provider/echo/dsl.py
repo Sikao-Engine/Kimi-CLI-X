@@ -231,4 +231,4 @@ def _raise_simulated_error(payload: str, lineno: int, raw_line: str) -> None:
             f"Invalid error spec at line {lineno}: expected status code or "
             f"'connection'/'timeout', got {first!r}"
         ) from None
-    raise APIStatusError(status_code, message or f"Simulated {status_code} error")
+    raise APIStatusError(status_code, message or f"Simulated {status_code} error", headers=None)

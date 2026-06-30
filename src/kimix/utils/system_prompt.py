@@ -70,7 +70,7 @@ def get_system_prompt(
             items.append('Multi-step: use `TodoList`. Finish all before ending.')
             if not is_sub_agent:
                 if yolo:
-                    items.append('Yolo: no asking. accept all.')
+                    items.append('Yolo: no asking. accept all. When choices or options appear, independently pick the best one and continue; do not ask the user which to choose.')
 
                 items.append('Use `ContextRetrieval` to recall past conversation turns that were compacted out of context.')
             else:

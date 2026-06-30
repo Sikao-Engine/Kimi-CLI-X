@@ -10,6 +10,7 @@ import orjson
 
 import kimix.base as base
 from kimi_agent_sdk import Session
+from kosong.chat_provider import APIStatusError
 from kimix.base import Color, MessageType, Style, print_agent_json, print_agent_json_flush_text
 from kimix.tools.common import _export_to_temp_file
 from kimix.utils.session import (
@@ -213,7 +214,7 @@ async def _run_single_prompt(
     if info_print:
         base._stream.colorful_print_word(f"{label}\n", fg=base.Color.BRIGHT_CYAN, require_new_line=True)
 
-    max_retries = 5
+    max_retries = 3
     for attempt in range(max_retries):
         if session._cancel_event is not None and session._cancel_event.is_set():
             return False
@@ -246,19 +247,13 @@ async def _run_single_prompt(
             base._stream.colorful_print_word(str(e), fg=Color.BRIGHT_RED, styles=[Style.BOLD], require_new_line=True)
             if session:
                 session.cancel()
-            if "429" in str(e) or "400" in str(e) or "500" in str(e) or "502" in str(e) or "503" in str(e):
-                wait_time = min(2**attempt, 60)
-                base._stream.colorful_print_word(
-                    f"Rate limited. Waiting {wait_time}s...",
-                    fg=Color.BRIGHT_YELLOW,
-                    styles=[Style.BOLD],
-                    require_new_line=True,
-                )
-                await asyncio.sleep(wait_time)
-            elif attempt == max_retries - 1:
+            # HTTP API errors are already retried at the low-level chat-provider/soul
+            # layer; do not add another retry loop here.
+            if isinstance(e, APIStatusError):
                 raise
-            else:
-                await asyncio.sleep(1)
+            if attempt == max_retries - 1:
+                raise
+            await asyncio.sleep(1)
     return False
 
 

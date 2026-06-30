@@ -24,7 +24,7 @@ from kimi_cli.llm import LLM
 from kimi_cli.soul import run_soul
 from kimi_cli.soul.agent import Agent, Runtime
 from kimi_cli.soul.context import Context
-from kimi_cli.soul.kimisoul import KimiSoul
+from kimi_cli.soul.kimisoul import KimiSoul, _RETRY_WAIT
 from kimi_cli.utils.aioqueue import QueueShutDown
 from kimi_cli.wire import Wire
 from kimi_cli.wire.types import StepBegin, StepRetry
@@ -483,3 +483,64 @@ async def test_step_connection_recovery_then_401_triggers_oauth_refresh(
     assert context.history[-1].extract_text(" ").strip() == "auth recovered"
     assert len(refresh_mock.await_args_list) == 2
     assert any(call.kwargs.get("force") is True for call in refresh_mock.await_args_list)
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit-aware retry wait strategy
+# ---------------------------------------------------------------------------
+
+
+class _FakeRetryState:
+    """Minimal stand-in for tenacity.RetryCallState for wait-strategy tests."""
+
+    def __init__(self, attempt_number: int, exception: BaseException | None) -> None:
+        self.attempt_number = attempt_number
+        self.outcome = self._Outcome(exception)
+
+    class _Outcome:
+        def __init__(self, exception: BaseException | None) -> None:
+            self._exception = exception
+
+        def exception(self) -> BaseException | None:
+            return self._exception
+
+
+def test_rate_limit_wait_uses_retry_after_header() -> None:
+    err = APIStatusError(
+        429,
+        "rate limited",
+        headers={"retry-after": "5", "x-request-id": "req-1"},
+    )
+    state = _FakeRetryState(attempt_number=1, exception=err)
+    assert _RETRY_WAIT(state) == 5.0
+
+
+def test_rate_limit_wait_caps_retry_after() -> None:
+    err = APIStatusError(
+        429,
+        "rate limited",
+        headers={"retry-after": "120"},
+    )
+    state = _FakeRetryState(attempt_number=1, exception=err)
+    assert _RETRY_WAIT(state) == 60.0
+
+
+def test_rate_limit_wait_falls_back_to_exponential_backoff() -> None:
+    err = APIStatusError(429, "rate limited")
+    state = _FakeRetryState(attempt_number=1, exception=err)
+    wait = _RETRY_WAIT(state)
+    assert 1.0 <= wait <= 2.0
+
+
+def test_non_rate_limit_status_uses_default_backoff() -> None:
+    err = APIStatusError(503, "service unavailable")
+    state = _FakeRetryState(attempt_number=1, exception=err)
+    wait = _RETRY_WAIT(state)
+    assert 0.3 <= wait <= 0.8
+
+
+def test_non_api_error_uses_default_backoff() -> None:
+    err = APIConnectionError("connection reset")
+    state = _FakeRetryState(attempt_number=1, exception=err)
+    wait = _RETRY_WAIT(state)
+    assert 0.3 <= wait <= 0.8

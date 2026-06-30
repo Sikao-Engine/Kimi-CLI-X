@@ -874,6 +874,11 @@ def _image_url_part_to_anthropic(part: ImageURLPart) -> ToolResultContent:
         )
 
 
+def _response_headers(error: AnthropicError) -> Mapping[str, str] | None:
+    response = getattr(error, "response", None)
+    return getattr(response, "headers", None) if response is not None else None
+
+
 def _convert_error(error: AnthropicError | httpx.HTTPError) -> ChatProviderError:
     # httpx errors may leak through the Anthropic SDK during streaming;
     # delegate to the shared converter.
@@ -882,13 +887,21 @@ def _convert_error(error: AnthropicError | httpx.HTTPError) -> ChatProviderError
     # Anthropic SDK errors — check subclasses before parents to avoid
     # misclassification (e.g. APITimeoutError inherits APIConnectionError).
     if isinstance(error, AnthropicAPIStatusError):
-        return APIStatusError(error.status_code, str(error))
+        return APIStatusError(
+            error.status_code, str(error), headers=_response_headers(error)
+        )
     if isinstance(error, AnthropicAuthenticationError):
-        return APIStatusError(getattr(error, "status_code", 401), str(error))
+        return APIStatusError(
+            getattr(error, "status_code", 401), str(error), headers=_response_headers(error)
+        )
     if isinstance(error, AnthropicPermissionDeniedError):
-        return APIStatusError(getattr(error, "status_code", 403), str(error))
+        return APIStatusError(
+            getattr(error, "status_code", 403), str(error), headers=_response_headers(error)
+        )
     if isinstance(error, AnthropicRateLimitError):
-        return APIStatusError(getattr(error, "status_code", 429), str(error))
+        return APIStatusError(
+            getattr(error, "status_code", 429), str(error), headers=_response_headers(error)
+        )
     if isinstance(error, AnthropicAPITimeoutError):
         return APITimeoutError(str(error))
     if isinstance(error, AnthropicAPIConnectionError):
