@@ -517,7 +517,7 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
                     require_new_line=True,
                 )
                 async for message in planner_session.prompt(revision_reminder):
-                    print_agent_json(message, planner_session, None)
+                    print_agent_json(message, planner_session, None, True)
                 base._stream.print_word("\n", require_new_line=True)
 
                 # Re-open the updated plan file for review
