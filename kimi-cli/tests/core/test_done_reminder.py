@@ -18,8 +18,11 @@ from kimi_cli.soul.dynamic_injections.done_reminder import (
     _DONE_REMINDER_TEMPLATE,
     _DONE_REMINDER_TYPE,
     _contains_completion_keyword,
+    _find_last_user_prompt,
+    _truncate_prompt,
     DoneReminderProvider,
 )
+from kimi_cli.soul.message import is_system_reminder_message
 from kimi_cli.soul.kimisoul import KimiSoul
 from kimi_cli.soul.toolset import KimiToolset
 from kimi_cli.tools.todo import TodoList
@@ -48,6 +51,10 @@ def _thinking_message(think_text: str) -> Message:
     return Message(role="assistant", content=[ThinkPart(think=think_text)])
 
 
+def _user_message(text: str) -> Message:
+    return Message(role="user", content=[TextPart(text=text)])
+
+
 async def test_no_injection_without_assistant_message(
     runtime: Runtime, tmp_path: Path
 ) -> None:
@@ -65,7 +72,7 @@ async def test_no_injection_when_text_has_no_completion_word(
     """No injection when the assistant text lacks any completion keyword."""
     soul = _make_soul(runtime, tmp_path)
     provider = DoneReminderProvider()
-    history = [_assistant_message("I will start working on this now.")]
+    history = [_user_message("hello"), _assistant_message("I will start working on this now.")]
 
     assert await provider.get_injections(history, soul) == []
 
@@ -141,7 +148,7 @@ async def test_injection_for_various_completion_phrases(
     """A pending todo plus any completion phrase triggers the reminder."""
     soul = _make_soul(runtime, tmp_path)
     provider = DoneReminderProvider()
-    history = [_assistant_message(f"Great, the work is {phrase}.")]
+    history = [_user_message("do the task"), _assistant_message(f"Great, the work is {phrase}.")]
 
     with patch(
         "kimi_cli.soul.dynamic_injections.done_reminder.TodoList",
@@ -158,7 +165,7 @@ async def test_injection_for_various_completion_phrases(
 
     assert len(injections) == 1
     assert injections[0].type == _DONE_REMINDER_TYPE
-    assert injections[0].content == _DONE_REMINDER_TEMPLATE
+    assert injections[0].content == _DONE_REMINDER_TEMPLATE.format(user_prompt="do the task")
 
 
 async def test_injection_when_text_contains_done_and_pending_todos(
@@ -175,12 +182,13 @@ async def test_injection_when_text_contains_done_and_pending_todos(
 
     soul = _make_soul(runtime, tmp_path)
     provider = DoneReminderProvider()
-    history = [_assistant_message("I am done with the implementation.")]
+    history = [_user_message("implement feature X"), _assistant_message("I am done with the implementation.")]
 
     injections = await provider.get_injections(history, soul)
 
     assert len(injections) == 1
     assert injections[0].type == _DONE_REMINDER_TYPE
+    assert injections[0].content == _DONE_REMINDER_TEMPLATE.format(user_prompt="implement feature X")
 
 
 async def test_no_injection_when_all_todos_done(
@@ -196,7 +204,7 @@ async def test_no_injection_when_all_todos_done(
 
     soul = _make_soul(runtime, tmp_path)
     provider = DoneReminderProvider()
-    history = [_assistant_message("I am done with the implementation.")]
+    history = [_user_message("implement feature"), _assistant_message("I am done with the implementation.")]
 
     assert await provider.get_injections(history, soul) == []
 
@@ -207,7 +215,7 @@ async def test_no_injection_when_todolist_tool_unavailable(
     """No injection when the agent's toolset does not expose TodoList."""
     soul = _make_soul(runtime, tmp_path, toolset=EmptyToolset())
     provider = DoneReminderProvider()
-    history = [_assistant_message("I am done.")]
+    history = [_user_message("test"), _assistant_message("I am done.")]
 
     assert await provider.get_injections(history, soul) == []
 
@@ -218,7 +226,7 @@ async def test_no_injection_for_thinking_block_only(
     """Thinking/reasoning content must not count as assistant text."""
     soul = _make_soul(runtime, tmp_path)
     provider = DoneReminderProvider()
-    history = [_thinking_message("I am done with the implementation.")]
+    history = [_user_message("work on it"), _thinking_message("I am done with the implementation.")]
 
     with patch(
         "kimi_cli.soul.dynamic_injections.done_reminder.TodoList",
@@ -255,9 +263,10 @@ async def test_cooldown_prevents_duplicate_injection(
     ):
         # First assistant message at step 1 -> injects.
         soul._current_step_no = 1
-        history1 = [_assistant_message("Done with step one.")]
+        history1 = [_user_message("do step one"), _assistant_message("Done with step one.")]
         injections = await provider.get_injections(history1, soul)
         assert len(injections) == 1
+        assert injections[0].content == _DONE_REMINDER_TEMPLATE.format(user_prompt="do step one")
 
         # Same message again -> no injection (same assistant index).
         injections = await provider.get_injections(history1, soul)
@@ -284,6 +293,7 @@ async def test_cooldown_prevents_duplicate_injection(
         ]
         injections = await provider.get_injections(history3, soul)
         assert len(injections) == 1
+        assert injections[0].content == _DONE_REMINDER_TEMPLATE.format(user_prompt="great")
 
 
 async def test_disabled_config_returns_empty() -> None:
@@ -291,7 +301,7 @@ async def test_disabled_config_returns_empty() -> None:
     provider = DoneReminderProvider(enabled=False)
     soul = MagicMock()
     soul.is_subagent = False
-    history = [_assistant_message("I am done.")]
+    history = [_user_message("test"), _assistant_message("I am done.")]
 
     assert await provider.get_injections(history, soul) == []
 
@@ -302,7 +312,7 @@ async def test_subagent_is_skipped(runtime: Runtime, tmp_path: Path) -> None:
     # Simulate a subagent by overriding the property source.
     soul._agent.runtime.role = "subagent"
     provider = DoneReminderProvider()
-    history = [_assistant_message("I am done.")]
+    history = [_user_message("test"), _assistant_message("I am done.")]
 
     assert await provider.get_injections(history, soul) == []
 
@@ -327,8 +337,10 @@ async def test_on_context_compacted_resets_state(
         ),
     ):
         soul._current_step_no = 1
-        history = [_assistant_message("Done.")]
-        assert len(await provider.get_injections(history, soul)) == 1
+        history = [_user_message("test"), _assistant_message("Done.")]
+        injections = await provider.get_injections(history, soul)
+        assert len(injections) == 1
+        assert injections[0].content == _DONE_REMINDER_TEMPLATE.format(user_prompt="test")
 
         # Re-running the same history would normally be throttled by assistant index.
         await provider.on_context_compacted()
@@ -358,3 +370,159 @@ async def test_on_context_compacted_resets_state(
 )
 def test_contains_completion_keyword(text: str, expected: bool) -> None:
     assert _contains_completion_keyword(text) is expected
+
+
+# ── Truncation tests ──────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("short", "short"),
+        ("x" * 4096, "x" * 4096),
+        ("x" * 5000, "x" * 4096 + "..."),
+    ],
+)
+def test_truncate_prompt(text: str, expected: str) -> None:
+    """Parametrized test for _truncate_prompt helper."""
+    assert _truncate_prompt(text) == expected
+
+
+async def test_injection_under_max_length(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    """Prompt under 4096 chars is not truncated in the injection content."""
+    soul = _make_soul(runtime, tmp_path)
+    provider = DoneReminderProvider()
+    user_text = "implement the login feature"
+    history = [_user_message(user_text), _assistant_message("Done.")]
+
+    pending_output = "Current todo list:\n- [pending] Write tests"
+    with patch(
+        "kimi_cli.soul.dynamic_injections.done_reminder.TodoList",
+        return_value=AsyncMock(
+            return_value=ToolReturnValue(
+                is_error=False,
+                output=pending_output,
+                message="",
+                display=[],
+            )
+        ),
+    ):
+        injections = await provider.get_injections(history, soul)
+
+    assert len(injections) == 1
+    assert injections[0].content == _DONE_REMINDER_TEMPLATE.format(user_prompt=user_text)
+
+
+async def test_injection_exactly_max_length(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    """Prompt exactly 4096 chars is not truncated."""
+    soul = _make_soul(runtime, tmp_path)
+    provider = DoneReminderProvider()
+    user_text = "x" * 4096
+    history = [_user_message(user_text), _assistant_message("Done.")]
+
+    pending_output = "Current todo list:\n- [pending] Write tests"
+    with patch(
+        "kimi_cli.soul.dynamic_injections.done_reminder.TodoList",
+        return_value=AsyncMock(
+            return_value=ToolReturnValue(
+                is_error=False,
+                output=pending_output,
+                message="",
+                display=[],
+            )
+        ),
+    ):
+        injections = await provider.get_injections(history, soul)
+
+    assert len(injections) == 1
+    assert injections[0].content == _DONE_REMINDER_TEMPLATE.format(user_prompt=user_text)
+
+
+async def test_injection_over_max_length(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    """Prompt over 4096 chars is truncated to 4096 chars plus ``...``."""
+    soul = _make_soul(runtime, tmp_path)
+    provider = DoneReminderProvider()
+    user_text = "x" * 5000
+    history = [_user_message(user_text), _assistant_message("Done.")]
+
+    pending_output = "Current todo list:\n- [pending] Write tests"
+    with patch(
+        "kimi_cli.soul.dynamic_injections.done_reminder.TodoList",
+        return_value=AsyncMock(
+            return_value=ToolReturnValue(
+                is_error=False,
+                output=pending_output,
+                message="",
+                display=[],
+            )
+        ),
+    ):
+        injections = await provider.get_injections(history, soul)
+
+    assert len(injections) == 1
+    expected_prompt = "x" * 4096 + "..."
+    assert injections[0].content == _DONE_REMINDER_TEMPLATE.format(user_prompt=expected_prompt)
+
+
+async def test_injection_no_user_prompt(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    """When no user message exists, fallback to empty string."""
+    soul = _make_soul(runtime, tmp_path)
+    provider = DoneReminderProvider()
+    history = [_assistant_message("Done.")]
+
+    pending_output = "Current todo list:\n- [pending] Write tests"
+    with patch(
+        "kimi_cli.soul.dynamic_injections.done_reminder.TodoList",
+        return_value=AsyncMock(
+            return_value=ToolReturnValue(
+                is_error=False,
+                output=pending_output,
+                message="",
+                display=[],
+            )
+        ),
+    ):
+        injections = await provider.get_injections(history, soul)
+
+    assert len(injections) == 1
+    assert injections[0].content == _DONE_REMINDER_TEMPLATE.format(user_prompt="")
+
+
+async def test_injection_system_reminder_skipped(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    """System-reminder user messages are skipped; real user message is used."""
+    from kimi_cli.soul.message import system_reminder
+
+    soul = _make_soul(runtime, tmp_path)
+    provider = DoneReminderProvider()
+    history = [
+        Message(role="user", content=[system_reminder("Previous step injection")]),
+        _user_message("real user instruction"),
+        _assistant_message("Done."),
+    ]
+
+    pending_output = "Current todo list:\n- [pending] Write tests"
+    with patch(
+        "kimi_cli.soul.dynamic_injections.done_reminder.TodoList",
+        return_value=AsyncMock(
+            return_value=ToolReturnValue(
+                is_error=False,
+                output=pending_output,
+                message="",
+                display=[],
+            )
+        ),
+    ):
+        injections = await provider.get_injections(history, soul)
+
+    assert len(injections) == 1
+    assert injections[0].content == _DONE_REMINDER_TEMPLATE.format(user_prompt="real user instruction")

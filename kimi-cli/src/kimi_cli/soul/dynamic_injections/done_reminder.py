@@ -17,7 +17,9 @@ _DONE_REMINDER_TYPE = "done_reminder"
 
 _DONE_REMINDER_TEMPLATE = (
     "You indicated something is finished. Before concluding, call `TodoList` "
-    "to verify no pending tasks remain, then continue until all todos are done."
+    "to verify no pending tasks remain, then continue until all todos are done.\n"
+    'Original user prompt:\n{user_prompt}'
+    
 )
 
 # Single-word completion markers matched with word boundaries.
@@ -57,6 +59,46 @@ _COMPLETION_PATTERNS: list[re.Pattern[str]] = [
 
 # Regex to detect a non-done todo status in TodoList read output.
 _PENDING_TODO_RE = re.compile(r"-\s+\[(?!done\b)[^\]]+\]")
+
+_MAX_PROMPT_LEN = 4096
+
+
+def _truncate_prompt(text: str, max_len: int = _MAX_PROMPT_LEN) -> str:
+    """Truncate *text* to *max_len* chars, appending ``...`` if truncated."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "..."
+
+
+def _find_last_user_prompt(history: Sequence[Message], soul: KimiSoul) -> str:
+    """Return the text of the most recent real user message before the last
+    assistant message, skipping system-reminder messages.
+
+    Falls back to ``soul._current_turn_user_text`` if no user message found.
+    """
+    from kimi_cli.soul.message import is_system_reminder_message
+
+    last_assistant_idx = -1
+    for idx, msg in enumerate(history):
+        if msg.role == "assistant":
+            last_assistant_idx = idx
+
+    # No assistant message at all - no user prompt to find
+    if last_assistant_idx == -1:
+        return getattr(soul, "_current_turn_user_text", "") or ""
+
+    # Walk backwards from last_assistant_idx to find the most recent
+    # real user message (skip system-reminder injections).
+    for idx in range(last_assistant_idx - 1, -1, -1):
+        msg = history[idx]
+        if msg.role == "user" and not is_system_reminder_message(msg):
+            text = msg.extract_text(" ").strip()
+            if text:
+                return text
+            break  # found a user message but it was empty
+
+    # Fallback to turn-starting user text
+    return getattr(soul, "_current_turn_user_text", "") or ""
 
 
 def _has_pending_todos(todo_output: str) -> bool:
@@ -127,9 +169,13 @@ class DoneReminderProvider(DynamicInjectionProvider):
         ):
             return []
 
+        user_prompt = _find_last_user_prompt(history, soul)
+        truncated = _truncate_prompt(user_prompt)
+        content = _DONE_REMINDER_TEMPLATE.format(user_prompt=truncated)
+
         self._last_injected_step = step_no
         self._last_injected_assistant_index = assistant_index
-        return [DynamicInjection(type=_DONE_REMINDER_TYPE, content=_DONE_REMINDER_TEMPLATE)]
+        return [DynamicInjection(type=_DONE_REMINDER_TYPE, content=content)]
 
     async def on_context_compacted(self) -> None:
         """Reset throttling so the reminder can fire again after compaction."""

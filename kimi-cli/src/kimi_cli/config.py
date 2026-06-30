@@ -146,7 +146,7 @@ class LoopControl(BaseModel):
     """When true, inject a system-reminder to verify pending todos with the
     TodoList tool whenever the model's text output contains completion keywords
     such as 'done' or 'finished'. Default is true."""
-    done_reminder_cooldown_steps: int = Field(default=5, ge=1)
+    done_reminder_cooldown_steps: int = Field(default=10, ge=1)
     """Minimum number of steps between consecutive done-reminder injections.
     Default is 5."""
     auto_retrieve_history: bool = Field(default=True)
