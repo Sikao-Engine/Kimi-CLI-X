@@ -300,9 +300,8 @@ At startup, `KimiToolset.load_tools()` (in `kimi-cli/src/kimi_cli/soul/toolset.p
 | File | Purpose |
 |------|---------|
 | `agent_worker.json` | Default worker agent (default agent file) |
-| `agent_boss.json` | Boss agent with ReadFile/Glob/Grep/FetchURL/Search/Note |
-| `agent_searcher.json` | Fast search agent with Run/Input/TaskOutput/ReadFile/Glob/Grep/FetchURL/WriteFile/EditFile |
-| `agent_subagent.json` | Sub-agent with Run/Input/TaskOutput/Search/TodoList/WriteFile/ReadFile/Glob/Grep/EditFile/FetchURL |
+| `agent_boss.json` | Boss agent with ReadFile/Glob/Grep/FetchURL/Note |
+| `agent_subagent.json` | Sub-agent with Run/Input/TaskOutput/TodoList/WriteFile/ReadFile/Glob/Grep/EditFile/FetchURL |
 
 **kimi-cli base agents** (in `kimi-cli/src/kimi_cli/agents/default/`):
 
@@ -329,7 +328,6 @@ agent:
 3. **Choose the right agent file** based on which agent profile should have the tool:
    - `agent_worker.json` — most common; the default agent
    - `agent_boss.json` — boss/planning agent
-   - `agent_searcher.json` — fast search agents
    - `agent_subagent.json` — sub-agents spawned via the `Agent` tool
 
 ### YAML Inheritance
@@ -345,6 +343,6 @@ All kimix agent YAML files use `extend: default`, which resolves to `kimi-cli/sr
 | Prefix | Source |
 |--------|--------|
 | `kimi_cli.tools.*` | Built-in kimi-cli tools (Shell, ReadFile, Grep, etc.) |
-| `kimix.tools.*` | Kimix-extended tools (Run, Input, FetchURL, Search, Agent, Note, etc.) |
+| `kimix.tools.*` | Kimix-extended tools (Run, Input, FetchURL, Agent, Note, etc.) |
 
 Use `kimix.tools.*` for new tools created under `src/kimix/tools/`.

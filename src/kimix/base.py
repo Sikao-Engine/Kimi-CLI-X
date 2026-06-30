@@ -508,8 +508,6 @@ def _format_tool_args(name: str, args: str | None) -> str | None:
                 return ", ".join(_collect("task_id", "text"))
             case "TaskOutput":
                 return ", ".join(_collect("task_id", "block", "timeout", "output_path", "kill"))
-            case "Search":
-                return ", ".join(_collect("prompt", "dest_path"))
             case "TodoList":
                 parts: list[str] = []
                 if "todos" in parsed:

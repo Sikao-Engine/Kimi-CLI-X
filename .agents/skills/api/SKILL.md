@@ -206,7 +206,6 @@ from kimix.utils.system_prompt import SystemPromptType, SystemPromptCallback, ge
 SystemPromptType.Worker           # Standard coding agent (terse, direct output)
 SystemPromptType.TodoMaker        # Plan maker agent (creates implementation plans)
 SystemPromptType.Thinker          # Thinker agent (thinks in <thinking> tags, self-verifies)
-SystemPromptType.SkillSearcher    # Skill searcher (read-only, searches skills)
 SystemPromptType.TrivialSubAgent  # Read-only sub-agent (rejects write/edit tasks)
 SystemPromptType.Supervisor       # Supervisor agent (outlines, decomposes, dispatches, tracks, verifies)
 
@@ -534,19 +533,6 @@ from kaos.path import KaosPath
 kaos_path = make_kaos_dir("./my_folder")
 ```
 
-## Search Utilities (kimix.utils)
-
-### TextSearchIndex
-
-```python
-# File: src/kimix/utils/_globals.py
-from kimix.utils import TextSearchIndex, SearchResult
-
-# Note: these are placeholder exports initialized to None.
-# They are reserved for future FAISS-based skill search integration.
-# Use kimix.tools.skill.faiss.text_search directly when available.
-```
-
 ## Prompt String Utilities (kimix.utils.prompt_str)
 
 ```python
@@ -647,7 +633,6 @@ from kimix.utils import (
     prompt_path, prompt_plan, prompt_plan_async,
     fix_error, async_prompt, async_fix_error,
     context_path, delete_session_dir, make_kaos_dir,
-    TextSearchIndex, SearchResult,
     set_ralph_loop,
     refresh_env_from_registry,
     # Internal/advanced
@@ -914,7 +899,6 @@ All tools are `CallableTool2` subclasses. Key ones:
 - `ParserTool` — parse/extract/strip comments; params: `language`, `source_code|file_path`, `mode="extract"`, `encoding="utf-8"`
 - `WritePlan` / `ReadPlan` / `EditPlan` — plan file tools
 - `StoreSession` / `LoadSession` / `LsSession` — key-value session persistence
-- `Search` — semantic skill search; params: `prompt`, `dest_path`
 - `FetchURL` — fetch web page as Markdown; params: `url`, `output_path`
 - `fetch_to_markdown(url, wait_until="networkidle")` — Playwright-based fetcher
 - `Zip` / `Unzip` — 7z archive tools; params: `source`, `destination`, `password`

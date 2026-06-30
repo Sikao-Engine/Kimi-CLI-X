@@ -2,7 +2,7 @@
 
 作为 coding agent，核心能力不仅体现在对代码逻辑的理解与生成上，更体现在与外部环境的高效交互之中。本教程将系统性地介绍当前默认 agent worker（`src/kimix/agent_worker.json`）所拥有的全部**内置工具（Built-in Tools）**，并深入讲解如何在提示词（Prompt）中精准地引导 agent 调用这些工具，以完成从文件操作、代码执行、信息检索到复杂任务编排的各类工作。
 
-> **注意**：`agent_worker.json` 通过 `extend: default` 继承基础配置，但由于显式重写了 `tools` 字段，最终可用的工具集**仅包含** `agent_worker.json` 中列出的 17 个工具。以下列表即为实际可用的完整配置。
+> **注意**：`agent_worker.json` 通过 `extend: default` 继承基础配置，但由于显式重写了 `tools` 字段，最终可用的工具集**仅包含** `agent_worker.json` 中列出的 18 个工具。以下列表即为实际可用的完整配置。
 
 ---
 
@@ -33,7 +33,7 @@
 - **不只"推测"问题，而是直接"读"文件、"搜"代码来验证**（`ReadFile`、`Grep`、`Glob`）
 - **不只"给出命令"，而是直接"运行"并观察输出**（`Run`）
 - **处理耗时任务时进行异步管理**（`TaskOutput`、`Input`）
-- **将外部资料纳入工作流**（`FetchURL`、`Search`）
+- **将外部资料纳入工作流**（`FetchURL`）
 
 ---
 
@@ -46,7 +46,7 @@
 | **文件与 I/O** | `WriteFile`, `ReadFile`, `EditFile`, `Glob`, `Grep` | 创建、读取、修改、搜索文件与目录 |
 | **代码执行** | `Run`, `Python`, `Bash`, `Powershell` | 执行可执行文件、bash / powershell 命令或 Python 代码 |
 | **进程管理** | `TaskOutput`, `Input` | 与后台进程交互、获取输出、发送输入 |
-| **搜索与信息** | `FetchURL`, `Search` | 获取网页内容、搜索本地 skill |
+| **搜索与信息** | `FetchURL` | 获取网页内容 |
 | **状态与标志** | `TodoList` | 追踪多步骤任务进度 |
 | **子代理** | `Agent`, `AgentList`, `AgentClose` | 创建、列出、关闭子代理会话 |
 
@@ -136,10 +136,6 @@
 #### `FetchURL` —— 获取网页内容
 - **功能**：使用无头浏览器获取网页内容并返回 Markdown 格式。适用于抓取文档、API 说明、技术博客等。
 - **示例场景**：读取某个包的官方文档页面、获取 GitHub issue 的详细内容。
-
-#### `Search` —— Skill 搜索
-- **功能**：基于语义搜索在本地 skill 目录中检索与关键词相关的 skill。支持指定 `dest_path` 限制搜索目录。
-- **示例场景**：查找是否有现成的 skill 可以处理当前任务、了解项目中可用的 agent 扩展能力。
 
 ---
 

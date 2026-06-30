@@ -20,10 +20,9 @@ class SystemPromptType(Enum):
     Worker = 0
     TodoMaker = 1
     Thinker = 2
-    SkillSearcher = 3
-    TrivialSubAgent = 4
-    Supervisor = 5
-    Reader = 6
+    TrivialSubAgent = 3
+    Supervisor = 4
+    Reader = 5
 
 
 class SystemPromptCallback:
@@ -93,9 +92,6 @@ def get_system_prompt(
                 items.append(
                     'Think in <thinking>...</thinking>. End with <quit/>. Concise. No text outside tags.')
                 items.append('Self-verify: catch errors and bad assumptions.')
-            case SystemPromptType.SkillSearcher:
-                role_doc = 'You are a searcher'
-                items.append('Search, analyze, report concisely.')
             case SystemPromptType.TrivialSubAgent:
                 worker_logic('persistent autonomous sub-agent', True)
                 items.append('If you need clarification from the parent agent, call the `ask_parent` tool with your question, then stop.')

@@ -1,6 +1,4 @@
 from ._globals import (
-    TextSearchIndex,
-    SearchResult,
     _default_session,
     _should_print_usage,
 )
@@ -32,9 +30,7 @@ from .prompt import prompt_async, prompt, prompt_path, prompt_plan, prompt_plan_
 from .fix_error import fix_error, async_prompt, async_fix_error
 
 __all__ = [
-    "TextSearchIndex",
     "SystemPromptType",
-    "SearchResult",
     "_default_session",
     "_should_print_usage",
     "_create_config",

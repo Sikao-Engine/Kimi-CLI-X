@@ -1,8 +1,8 @@
 # Built-in Tools Guide
 
-A coding agent's power comes from efficient interaction with the environment. This guide covers all 17 built-in tools in `agent_worker.json` and how to prompt the agent to use them effectively.
+A coding agent's power comes from efficient interaction with the environment. This guide covers all 18 built-in tools in `agent_worker.json` and how to prompt the agent to use them effectively.
 
-> **Note:** `agent_worker.json` overrides the `tools` field via `extend: default`, so only the 17 tools listed there are available.
+> **Note:** `agent_worker.json` overrides the `tools` field via `extend: default`, so only the 18 tools listed there are available.
 
 ---
 
@@ -13,7 +13,7 @@ A coding agent's power comes from efficient interaction with the environment. Th
 | **File & I/O** | `WriteFile`, `ReadFile`, `EditFile`, `Glob`, `Grep` | Create, read, modify, search files |
 | **Code Execution** | `Run`, `Python`, `Bash`, `Powershell` | Execute executables, bash / powershell commands, or Python code |
 | **Process Management** | `TaskOutput`, `Input` | Interact with background processes |
-| **Search & Info** | `FetchURL`, `Search` | Fetch web content, search local skills |
+| **Search & Info** | `FetchURL` | Fetch web content |
 | **State & Tracking** | `TodoList` | Track progress |
 | **Sub-agent & Session Management** | `Agent`, `AgentList`, `AgentClose` | Create, list, and close sub-agent sessions |
 
@@ -76,9 +76,6 @@ Send text to a running background process's stdin. For interactive programs.
 
 #### `FetchURL`
 Fetch web content as Markdown via headless browser. Use for docs, API references, GitHub issues.
-
-#### `Search`
-Semantic search in local skill directories. Optional `dest_path` filter.
 
 ---
 
