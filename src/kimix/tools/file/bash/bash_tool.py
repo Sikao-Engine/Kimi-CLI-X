@@ -135,39 +135,64 @@ def _find_git_bash_windows() -> str | None:
     return None
 
 
+def _git_bash_for_macos() -> str | None:
+    """Return bash bundled with the official Git installer for macOS, if any."""
+    git_path = shutil.which("git")
+    if not git_path:
+        return None
+    git_exe = Path(git_path).resolve()
+    if git_exe.parent.name.lower() == "bin":
+        git_root = git_exe.parent.parent
+    else:
+        git_root = git_exe.parent
+    for subpath in ("bin/bash", "usr/bin/bash"):
+        candidate = git_root / subpath
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate.resolve())
+    return None
+
+
+def _bash_candidates_macos() -> list[Path]:
+    """Return well-known bash paths for macOS (Homebrew/MacPorts)."""
+    return [
+        Path("/opt/homebrew/bin/bash"),
+        Path("/usr/local/bin/bash"),
+        Path("/opt/local/bin/bash"),
+    ]
+
+
+def _bash_candidates_system() -> list[Path]:
+    """Return standard system bash locations (Linux and macOS)."""
+    return [Path("/bin/bash"), Path("/usr/bin/bash")]
+
+
 @functools.lru_cache(maxsize=1)
 def find_bash() -> str | None:
-    """Find the system bash executable."""
+    """Find the system bash executable.
+
+    Resolution order on Linux/macOS:
+      1. Platform-specific well-known locations
+         (Homebrew/MacPorts on macOS).
+      2. Bash bundled with the official Git installer for macOS (macOS only).
+      3. Standard system locations (``/bin/bash`` and ``/usr/bin/bash``).
+      4. ``bash`` on PATH.
+    """
     if sys.platform == "win32":
         return _find_git_bash_windows()
+
     if sys.platform == "darwin":
-        # Strategy 1: Homebrew bash (Apple Silicon) – often newer than system bash
-        candidate = Path("/opt/homebrew/bin/bash")
-        if candidate.exists():
-            return str(candidate.resolve())
-        # Strategy 2: Homebrew bash (Intel Macs)
-        candidate = Path("/usr/local/bin/bash")
-        if candidate.exists():
-            return str(candidate.resolve())
-        # Strategy 3: MacPorts
-        candidate = Path("/opt/local/bin/bash")
-        if candidate.exists():
-            return str(candidate.resolve())
-        # Strategy 4: Git bash fallback (official Git installer for macOS)
-        git_path = shutil.which("git")
-        if git_path:
-            git_exe = Path(git_path).resolve()
-            if git_exe.parent.name.lower() == "bin":
-                git_root = git_exe.parent
-            else:
-                git_root = git_exe.parent
-            for subpath in ("bin/bash", "usr/bin/bash"):
-                bash_candidate = git_root / subpath
-                if bash_candidate.exists():
-                    return str(bash_candidate.resolve())
-        # Strategy 5: System bash (older, but guaranteed to exist)
-        candidate = Path("/bin/bash")
-        if candidate.exists():
+        # Prefer newer Homebrew/MacPorts bash over the aging system bash.
+        for candidate in _bash_candidates_macos():
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate.resolve())
+
+        # Git bash fallback (official Git installer for macOS).
+        git_bash = _git_bash_for_macos()
+        if git_bash:
+            return git_bash
+
+    for candidate in _bash_candidates_system():
+        if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate.resolve())
 
     bash = shutil.which("bash")
