@@ -5,6 +5,7 @@ import io
 import os
 import re
 import shutil
+import textwrap
 import uuid
 from pathlib import Path
 import queue
@@ -285,10 +286,70 @@ async def _summarize_long_output_async(session: Session, command: str, output: s
                 pass
 
 
+def _extract_export_path(output: str) -> str | None:
+    """If ``output`` is an export-to-temp-file message, return the file path."""
+    if not output:
+        return None
+    markers = [
+        "exported to file `",
+        "added to file `",
+        "exported to file: ",
+        "added to file: ",
+    ]
+    for marker in markers:
+        if marker in output:
+            return output.split(marker, 1)[-1].rstrip("]`")
+    return None
+
+
+def _build_session_output_block(
+    *,
+    task_id: str,
+    status: str,
+    output: str,
+    wait_matched: bool | None = None,
+    elapsed_seconds: float | None = None,
+    exit_code: int | None = None,
+    output_path: str | None = None,
+    output_truncated: bool = False,
+) -> str:
+    """Build a YAML-like metadata block for interactive/background sessions.
+
+    The block is appended to tool output so callers get structured metadata
+    (task_id, status, elapsed_seconds, etc.) alongside the raw process output.
+    """
+    lines = [
+        f"task_id: {task_id}",
+        f"status: {status}",
+        f"exit_code: {exit_code if exit_code is not None else 'null'}",
+        "output: |",
+    ]
+    if output:
+        lines.extend(textwrap.indent(output.rstrip("\n"), "  ").splitlines())
+    else:
+        lines.append("  (no output)")
+    lines.append(f"output_truncated: {str(output_truncated).lower()}")
+    lines.append(f"output_path: {output_path if output_path else 'null'}")
+    lines.append(
+        f"wait_matched: {str(wait_matched).lower() if wait_matched is not None else 'null'}"
+    )
+    lines.append(
+        f"elapsed_seconds: {elapsed_seconds:.2f}" if elapsed_seconds is not None else "elapsed_seconds: null"
+    )
+    return "\n".join(lines)
+
+
 class ProcessTask:
     """Run a subprocess in the background with stream output and input support."""
 
-    def __init__(self, path: str, args: list[str] | None = None, cwd: str | None = None, env: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        path: str,
+        args: list[str] | None = None,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        append_newline: bool = False,
+    ) -> None:
         import shutil
         # On Windows, subprocess.Popen with shell=False does not resolve .cmd/.bat
         # via PATHEXT. Use shutil.which to find the real executable (e.g. pnpm.CMD).
@@ -300,6 +361,7 @@ class ProcessTask:
         self.args = args or []
         self.cwd = cwd
         self.env = env
+        self._append_newline = append_newline
         self._stop_event = threading.Event()
         self._process_ref: asyncio.subprocess.Process | None = None
         self._stream: 'BackgroundStream' | None = None
@@ -552,6 +614,8 @@ class ProcessTask:
         # Write data to stdin
         try:
             if proc.stdin is not None and proc.returncode is None:
+                if self._append_newline and not data.endswith("\n"):
+                    data += "\n"
                 self._input_queue.put_nowait(data)
                 return True
         except (IOError, OSError, ValueError):

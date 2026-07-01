@@ -274,6 +274,23 @@ add_task(task_id, stream)
 
 ```
 
+## Reusing Subprocess Tools for Interactive Sessions
+
+The `Bash`, `Powershell`, and `Run` tools support dual-mode interaction:
+
+1. **Start a session** — call the tool with `interactive=True` (Bash/Powershell) or
+   `run_in_background=True` (Run). The response includes a `task_id`.
+2. **Continue the session** — call the *same* tool again with `task_id=<id>` and
+   `cmd`/`command` set to the input text. The tool sends the input to the process
+   stdin, waits up to `timeout` seconds, and returns the new output plus structured
+   metadata (`status`, `wait_matched`, `elapsed_seconds`, etc.).
+3. **Wait for a prompt** — supply `wait_for_pattern` with a regex. The tool blocks
+   until the pattern appears in the accumulated output.
+
+This replaces the older two-tool workflow for most interactive use cases.
+`TaskOutput` remains available as a fallback for listing, reading, exporting, or
+killing tasks without sending input.
+
 ## YAML Agent Registration
 
 Every new tool **must** be registered in a YAML agent file to be available to the agent.
@@ -301,7 +318,7 @@ At startup, `KimiToolset.load_tools()` (in `kimi-cli/src/kimi_cli/soul/toolset.p
 |------|---------|
 | `agent_worker.json` | Default worker agent (default agent file) |
 | `agent_boss.json` | Boss agent with ReadFile/Glob/Grep/FetchURL/Note |
-| `agent_subagent.json` | Sub-agent with Run/Input/TaskOutput/TodoList/WriteFile/ReadFile/Glob/Grep/EditFile/FetchURL |
+| `agent_subagent.json` | Sub-agent with Run/TaskOutput/TodoList/WriteFile/ReadFile/Glob/Grep/EditFile/FetchURL |
 
 **kimi-cli base agents** (in `kimi-cli/src/kimi_cli/agents/default/`):
 
@@ -343,6 +360,6 @@ All kimix agent YAML files use `extend: default`, which resolves to `kimi-cli/sr
 | Prefix | Source |
 |--------|--------|
 | `kimi_cli.tools.*` | Built-in kimi-cli tools (Shell, ReadFile, Grep, etc.) |
-| `kimix.tools.*` | Kimix-extended tools (Run, Input, FetchURL, Agent, Note, etc.) |
+| `kimix.tools.*` | Kimix-extended tools (Run, FetchURL, Agent, Note, etc.) |
 
 Use `kimix.tools.*` for new tools created under `src/kimix/tools/`.

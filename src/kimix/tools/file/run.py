@@ -2,6 +2,7 @@
 import anyio
 import asyncio
 from pathlib import Path
+import re
 import shlex
 import sys
 import tempfile
@@ -9,7 +10,14 @@ from kimi_cli.tools import SkipThisTool
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from pydantic import BaseModel, Field
 from kimi_cli.session import Session
-from kimix.tools.common import _maybe_export_output_async, _export_to_temp_file_async, _summarize_long_output_async, ProcessTask
+from kimix.tools.common import (
+    _build_session_output_block,
+    _extract_export_path,
+    _maybe_export_output_async,
+    _export_to_temp_file_async,
+    _summarize_long_output_async,
+    ProcessTask,
+)
 from kimi_cli.tools.display import ShellDisplayBlock
 from kimi_cli.share import get_share_dir
 import functools
@@ -94,11 +102,30 @@ class RunParams(BaseModel):
         ge=0,
         description="Output length threshold. Exceeding it sends the output to an anonymous sub-agent for summarization. 0 disables."
     )
+    task_id: str | None = Field(
+        default=None,
+        description=(
+            "Existing session/task ID to continue. When provided, 'command' is sent to the "
+            "process stdin instead of being executed."
+        ),
+    )
+    wait_for_pattern: str | None = Field(
+        default=None,
+        description=(
+            "Optional regex pattern. After starting or sending input, the tool blocks up "
+            "to 'timeout' seconds until the pattern appears in output."
+        ),
+    )
 
 
 class Run(CallableTool2[RunParams]):
     name: str = "Run"
-    description: str = "Run an executable or bash command."
+    description: str = (
+        "Run an executable or bash command. "
+        "Start a background session with run_in_background=True, then reuse the same tool with "
+        "task_id=<id> to send input and read output in one step. Use wait_for_pattern to wait "
+        "for a prompt. TaskOutput remains available as a fallback for listing/monitoring tasks."
+    )
     params: type[RunParams] = RunParams
 
     def __init__(self, session: Session):
@@ -129,6 +156,13 @@ class Run(CallableTool2[RunParams]):
 
     async def __call__(self, params: RunParams) -> ToolReturnValue:
         import os
+        if params.task_id is not None:
+            return await self._continue_session(params)
+
+        pattern = self._compile_pattern(params.wait_for_pattern)
+        if isinstance(pattern, ToolError):
+            return pattern
+
         script_path: str | None = None
         use_posix = self.use_posix
 
@@ -269,7 +303,20 @@ class Run(CallableTool2[RunParams]):
                 task = ProcessTask(executable, args_list, params.cwd, env_dict)
                 task_id = await task.start(self._session, "run", Path(executable).stem)
 
+                wait_matched: bool | None = None
+                elapsed_seconds: float | None = None
+
                 if params.run_in_background:
+                    if params.wait_for_pattern is not None and task.stream is not None:
+                        output, wait_matched, elapsed_seconds = await task.stream.wait_for_output(
+                            timeout=params.timeout, pattern=pattern
+                        )
+                        return await self._format_session_result(
+                            task_id, task.stream, params, output, "running",
+                            wait_matched=wait_matched, elapsed_seconds=elapsed_seconds,
+                            message=f"`{display_cmd}` running in background. task_id: `{task_id}`.",
+                            brief="Background task started",
+                        )
                     return ToolOk(
                         output="",
                         message=f"`{display_cmd}` running in background. task_id: `{task_id}`. Use `TaskOutput` tool to retrieve output.",
@@ -278,15 +325,27 @@ class Run(CallableTool2[RunParams]):
                             language="shell", command=display_cmd),
                     )
 
-                # Wait for completion with timeout (allow a small buffer for cleanup)
-                wait_timeout = params.timeout
-                await task.wait(wait_timeout)
+                # Wait for completion (or a pattern match) with timeout.
+                if params.wait_for_pattern is not None and task.stream is not None:
+                    output, wait_matched, elapsed_seconds = await task.stream.wait_for_output(
+                        timeout=params.timeout, pattern=pattern
+                    )
+                    if await task.thread_is_alive():
+                        return await self._format_session_result(
+                            task_id, task.stream, params, output, "running",
+                            wait_matched=wait_matched, elapsed_seconds=elapsed_seconds,
+                            message=f"`{display_cmd}` matched pattern and is still running.",
+                            brief="Pattern matched",
+                        )
+                else:
+                    wait_timeout = params.timeout
+                    await task.wait(wait_timeout)
 
                 if await task.thread_is_alive():
                     output = await task.stream.get_output() if task.stream else ""
                     return ToolError(
                         output=output,
-                        message=f"`{display_cmd}` running in background. task_id: `{task_id}`. use `TaskOutput` or `Input`",
+                        message=f"`{display_cmd}` Running in background. task_id: `{task_id}`. use `TaskOutput`",
                         brief="Timeout",
                     )
                 # Clean up foreground task registration
@@ -297,6 +356,7 @@ class Run(CallableTool2[RunParams]):
                 output = await task.stream.pop_output() if task.stream else ""
 
                 # Optionally offload a very long output to a sub-agent
+                output_truncated = False
                 if (
                     params.max_output_length > 0
                     and len(output) > params.max_output_length
@@ -305,12 +365,15 @@ class Run(CallableTool2[RunParams]):
                     output = await _summarize_long_output_async(
                         self._session, params.command, output
                     )
+                    output_truncated = True
 
                 # Handle output export if needed
+                output_path: str | None = None
                 if params.output_path:
                     async with await anyio.open_file(params.output_path, 'w', encoding='utf-8', errors='replace') as f:
                         await f.write(output)
                     display_path = params.output_path.replace("\\", "/")
+                    output_path = display_path
                     output = f'saved to file `{display_path}`'
 
                 # Check success
@@ -322,19 +385,43 @@ class Run(CallableTool2[RunParams]):
                             output = await _summarize_long_output_async(
                                 self._session, params.command, output
                             )
+                            output_truncated = True
                         else:
                             temp_path, _ = await _export_to_temp_file_async(key=None, content=output, ext='.txt')
                             display_temp_path = temp_path.replace("\\", "/")
+                            output_path = display_temp_path
                             output = f'saved to file `{display_temp_path}`'
-                    return ToolError(
+                    block = _build_session_output_block(
+                        task_id=task_id,
+                        status="completed",
                         output=output,
+                        exit_code=None,
+                        wait_matched=wait_matched,
+                        elapsed_seconds=elapsed_seconds,
+                        output_path=output_path,
+                        output_truncated=output_truncated,
+                    )
+                    return ToolError(
+                        output=block,
                         message=f"`{display_cmd}` failed",
                         brief="Command execution failed",
                     )
 
                 output = await _maybe_export_output_async(output)
-                return ToolOk(
+                if not output_path:
+                    output_path = _extract_export_path(output)
+                block = _build_session_output_block(
+                    task_id=task_id,
+                    status="completed",
                     output=output,
+                    exit_code=0,
+                    wait_matched=wait_matched,
+                    elapsed_seconds=elapsed_seconds,
+                    output_path=output_path,
+                    output_truncated=output_truncated,
+                )
+                return ToolOk(
+                    output=block,
                     message=f"`{display_cmd}` success",
                     brief="Command executed successfully",
                     display_block=ShellDisplayBlock(
@@ -352,3 +439,109 @@ class Run(CallableTool2[RunParams]):
                     os.remove(script_path)
                 except Exception:
                     pass
+
+    def _compile_pattern(self, wait_for_pattern: str | None) -> re.Pattern[str] | ToolError:
+        if wait_for_pattern is None:
+            return None
+        try:
+            return re.compile(wait_for_pattern)
+        except re.error as e:
+            return ToolError(
+                output="",
+                message=f"Invalid wait_for_pattern: {e}",
+                brief="Invalid pattern",
+            )
+
+    async def _continue_session(self, params: RunParams) -> ToolReturnValue:
+        """Send input to an existing Run session and optionally wait for output."""
+        from kimix.tools.background.utils import get_all_tasks
+
+        tasks = get_all_tasks(self._session)
+        task_id = params.task_id.strip() if params.task_id else ""
+        stream = tasks.get(task_id)
+        if stream is None:
+            started = [tid for tid, s in tasks.items() if await s.is_started()]
+            if not started:
+                return ToolError(
+                    output="",
+                    message=f"Task '{params.task_id}' not found. No running tasks.",
+                    brief="Task not found",
+                )
+            return ToolError(
+                output="",
+                message=(
+                    f"Task '{params.task_id}' not found. "
+                    f"Available tasks: [{', '.join(started)}]"
+                ),
+                brief=f"Task '{params.task_id}' not found",
+            )
+
+        pattern = self._compile_pattern(params.wait_for_pattern)
+        if isinstance(pattern, ToolError):
+            return pattern
+
+        # Discard prior output so we only report new output produced after this input.
+        await stream.pop_output()
+
+        input_text = params.command
+        if not input_text.endswith("\n"):
+            input_text += "\n"
+        if not await stream.input(input_text):
+            return ToolError(
+                output="",
+                message=f"Failed to send input to task '{task_id}'",
+                brief="Send input failed",
+            )
+
+        output, matched, elapsed = await stream.wait_for_output(
+            timeout=params.timeout, pattern=pattern
+        )
+        alive = await stream.thread_is_alive()
+        status = "running" if alive else "completed"
+        return await self._format_session_result(
+            task_id, stream, params, output, status,
+            wait_matched=matched, elapsed_seconds=elapsed,
+            message=f"Data sent to `{task_id}`. Status: {status}.",
+            brief="Data sent and output retrieved",
+        )
+
+    async def _process_output(
+        self, params: RunParams, output: str
+    ) -> tuple[str, str | None, bool]:
+        """Summarize/export long output and return (display_output, path, truncated)."""
+        output_truncated = False
+        if params.max_output_length > 0 and len(output) > params.max_output_length:
+            output = await _summarize_long_output_async(
+                self._session, params.command, output
+            )
+            output_truncated = True
+        output = await _maybe_export_output_async(output)
+        output_path = _extract_export_path(output)
+        return output, output_path, output_truncated
+
+    async def _format_session_result(
+        self,
+        task_id: str,
+        stream: 'BackgroundStream' | None,
+        params: RunParams,
+        output: str,
+        status: str,
+        *,
+        wait_matched: bool | None,
+        elapsed_seconds: float | None,
+        message: str,
+        brief: str,
+    ) -> ToolReturnValue:
+        """Build a ToolOk response with a structured output block."""
+        processed, output_path, output_truncated = await self._process_output(params, output)
+        block = _build_session_output_block(
+            task_id=task_id,
+            status=status,
+            output=processed,
+            exit_code=None if status != "completed" else (0 if await stream.success() else None),
+            wait_matched=wait_matched,
+            elapsed_seconds=elapsed_seconds,
+            output_path=output_path,
+            output_truncated=output_truncated,
+        )
+        return ToolOk(output=block, message=message, brief=brief)

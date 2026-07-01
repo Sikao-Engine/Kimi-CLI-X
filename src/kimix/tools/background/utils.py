@@ -1,7 +1,9 @@
 import asyncio
 import inspect
 import io
+import re
 import threading
+import time
 import queue
 from typing import Any, Awaitable, Callable, cast
 
@@ -132,6 +134,46 @@ class BackgroundStream:
     async def is_stopped(self) -> bool:
         """Check if the stream has been stopped."""
         return self._stopped
+
+    async def wait_for_output(
+        self,
+        *,
+        timeout: float,
+        pattern: re.Pattern[str] | None = None,
+    ) -> tuple[str, bool, float]:
+        """Wait for output, optionally until ``pattern`` matches.
+
+        Args:
+            timeout: Maximum seconds to wait. ``0`` returns immediately after
+                checking the current accumulated output.
+            pattern: Compiled regex pattern. When provided, the loop stops as
+                soon as the pattern is found in the accumulated output.
+
+        Returns:
+            ``(output, matched, elapsed_seconds)``. ``matched`` is ``True`` only
+            when ``pattern`` was supplied and found before the timeout.
+        """
+        start = time.monotonic()
+        matched = False
+        output = ""
+        elapsed = 0.0
+
+        while True:
+            output = await self.get_output()
+            elapsed = time.monotonic() - start
+            if pattern is not None and pattern.search(output):
+                matched = True
+                break
+            if timeout <= 0 or elapsed >= timeout:
+                break
+            if not await self.thread_is_alive():
+                # Process finished; grab any final data that arrived since the
+                # last poll before leaving the loop.
+                output = await self.get_output()
+                break
+            await asyncio.sleep(0.1)
+
+        return output, matched, elapsed
 
     async def stop(self) -> bool:
         """Stop the background thread.

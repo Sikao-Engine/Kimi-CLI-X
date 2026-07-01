@@ -2,6 +2,7 @@
 
 import asyncio
 import queue
+import re
 import threading
 import time
 from typing import Any
@@ -466,3 +467,60 @@ async def test_discard_all_tasks(mock_session: MagicMock) -> None:
 async def test_discard_all_tasks_no_data(mock_session: MagicMock) -> None:
     # should not raise
     await discard_all_tasks(mock_session)
+
+
+# ---------------------------------------------------------------------------
+# BackgroundStream – wait_for_output
+# ---------------------------------------------------------------------------
+async def test_wait_for_output_matches_pattern(stream: BackgroundStream) -> None:
+    def worker(q: queue.Queue[str]) -> None:
+        q.put("hello ")
+        time.sleep(0.05)
+        q.put("world")
+
+    await stream.start(worker, stop_function=lambda: None)
+    output, matched, elapsed = await stream.wait_for_output(
+        timeout=2.0, pattern=re.compile(r"hello world")
+    )
+    assert matched is True
+    assert "hello world" in output
+    assert elapsed >= 0.0
+
+
+async def test_wait_for_output_returns_on_no_match(stream: BackgroundStream) -> None:
+    def worker(q: queue.Queue[str]) -> None:
+        q.put("goodbye")
+        time.sleep(0.1)
+
+    await stream.start(worker, stop_function=lambda: None)
+    output, matched, elapsed = await stream.wait_for_output(
+        timeout=0.5, pattern=re.compile(r"hello world")
+    )
+    assert matched is False
+    assert "goodbye" in output
+    assert elapsed >= 0.0
+
+
+async def test_wait_for_output_zero_timeout_checks_current_output(stream: BackgroundStream) -> None:
+    def worker(q: queue.Queue[str]) -> None:
+        q.put("already here")
+
+    await stream.start(worker, stop_function=lambda: None)
+    # Give the worker a moment to queue the text.
+    time.sleep(0.05)
+    output, matched, elapsed = await stream.wait_for_output(timeout=0, pattern=re.compile(r"already"))
+    assert matched is True
+    assert "already here" in output
+    assert elapsed >= 0.0
+    assert elapsed < 0.1
+
+
+async def test_wait_for_output_no_pattern_waits_for_completion(stream: BackgroundStream) -> None:
+    def worker(q: queue.Queue[str]) -> None:
+        q.put("done")
+
+    await stream.start(worker, stop_function=lambda: None)
+    output, matched, elapsed = await stream.wait_for_output(timeout=2.0)
+    assert matched is False
+    assert output == "done"
+    assert elapsed >= 0.0

@@ -40,7 +40,7 @@ Kimi-CLI-X is a deep optimization of the original Kimi-CLI, focusing on **prompt
 
 | Capability | Description |
 |------------|-------------|
-| **Input tool** | TUI interaction with running processes. |
+| **Interactive shell tools** | Start and continue `Bash`/`Powershell`/`Run` sessions via `task_id`, with optional `wait_for_pattern`. |
 | **Docx / PDF conversion** | Built-in document conversion without external deps. |
 | **Python script execution** | Agent can run Python scripts directly. |
 | **Error logging** | Records tool-call errors for model backtracking and improvement. |

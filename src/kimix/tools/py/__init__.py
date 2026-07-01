@@ -76,7 +76,7 @@ class Python(CallableTool2[Params]):
                 output = await task.stream.get_output() if task.stream else ""
                 return ToolError(
                     output=output,
-                    message=f"Running in background. task_id: `{task_id}`. use `TaskOutput` or `Input`",
+                    message=f"Running in background. task_id: `{task_id}`. use `TaskOutput`",
                     brief="Timeout"
                 )
             # Clean up foreground task registration

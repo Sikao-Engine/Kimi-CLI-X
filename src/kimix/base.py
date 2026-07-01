@@ -497,15 +497,13 @@ def _format_tool_args(name: str, args: str | None) -> str | None:
 
         match name:
             case "Bash":
-                return ", ".join(_collect("cmd", "timeout"))
+                return ", ".join(_collect("cmd", "timeout", "interactive", "task_id", "wait_for_pattern"))
             case "Powershell":
-                return ", ".join(_collect("cmd", "timeout"))
+                return ", ".join(_collect("cmd", "timeout", "interactive", "task_id", "wait_for_pattern"))
             case "Run":
-                return ", ".join(_collect("command", "cwd", "timeout", "output_path", "env", "run_in_background"))
+                return ", ".join(_collect("command", "cwd", "timeout", "output_path", "env", "run_in_background", "task_id", "wait_for_pattern"))
             case "Python":
                 return ", ".join(_collect("code", "output_path", "timeout", "run_in_background", hide={"code"}))
-            case "Input":
-                return ", ".join(_collect("task_id", "text"))
             case "TaskOutput":
                 return ", ".join(_collect("task_id", "block", "timeout", "output_path", "kill"))
             case "TodoList":

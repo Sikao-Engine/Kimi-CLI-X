@@ -1,6 +1,6 @@
 # Built-in Tools Guide
 
-A coding agent's power comes from efficient interaction with the environment. This guide covers all 18 built-in tools in `agent_worker.json` and how to prompt the agent to use them effectively.
+A coding agent's power comes from efficient interaction with the environment. This guide covers all 17 built-in tools in `agent_worker.json` and how to prompt the agent to use them effectively.
 
 > **Note:** `agent_worker.json` overrides the `tools` field via `extend: default`, so only the 18 tools listed there are available.
 
@@ -12,7 +12,7 @@ A coding agent's power comes from efficient interaction with the environment. Th
 |----------|-------|-------------|
 | **File & I/O** | `WriteFile`, `ReadFile`, `EditFile`, `Glob`, `Grep` | Create, read, modify, search files |
 | **Code Execution** | `Run`, `Python`, `Bash`, `Powershell` | Execute executables, bash / powershell commands, or Python code |
-| **Process Management** | `TaskOutput`, `Input` | Interact with background processes |
+| **Process Management** | `TaskOutput` | Read, list, export, or kill background tasks |
 | **Search & Info** | `FetchURL` | Fetch web content |
 | **State & Tracking** | `TodoList` | Track progress |
 | **Sub-agent & Session Management** | `Agent`, `AgentList`, `AgentClose` | Create, list, and close sub-agent sessions |
@@ -49,11 +49,13 @@ Execute programs or built-in mapped commands (100+ commands: `cat`, `ls`, `grep`
 Execute commands or script snippets in a bash shell, supporting shell features such as pipes, redirection, and variable expansion.
 - **Platform**: mainly Linux / macOS.
 - **Use cases**: running shell scripts, combining commands with pipes, complex commands requiring shell interpretation.
+- **Interactive mode**: set `interactive=True` to start a persistent bash session. The tool returns a `task_id` immediately. To continue, call `Bash` again with `task_id=<id>` and `cmd` set to the input text; output is returned in the same call. Use `wait_for_pattern` to block until a prompt appears. Send `exit` to close the session.
 
 #### `Powershell`
 Execute commands or script snippets in PowerShell, supporting Windows-specific commands and pipelines.
 - **Platform**: mainly Windows.
 - **Use cases**: Windows management commands, calling .NET tools, handling cross-platform script compatibility on Windows.
+- **Interactive mode**: set `interactive=True` to start a persistent PowerShell session. The tool returns a `task_id` immediately. To continue, call `Powershell` again with `task_id=<id>` and `cmd` set to the input text; output is returned in the same call. Use `wait_for_pattern` to block until a prompt appears. Send `exit` to close the session.
 
 #### `Python`
 Execute Python code in a subprocess. Params: `code` (required), `output_path`, `timeout` (default 10s, range 3–60s). Exceeds timeout → background task. Max 8 concurrent Python processes. Code >30000 chars auto-saved to temp `.py` file.
@@ -61,14 +63,15 @@ Execute Python code in a subprocess. Params: `code` (required), `output_path`, `
 #### `TaskOutput`
 Get output from background tasks. Supports blocking wait, polling, `kill`, and `output_path` export.
 
-#### `Input`
-Send text to a running background process's stdin. For interactive programs.
+#### Interactive sessions with `Bash`, `Powershell`, and `Run`
+These tools can start a persistent session and continue it in later turns using the same tool:
 
-**Typical workflow:**
-1. `Run` to start a long command
-2. If timeout, get `task_id`
-3. `TaskOutput` to monitor progress
-4. `Input` for interactive responses
+1. Start: `Bash` / `Powershell` with `interactive=True`, or `Run` with `run_in_background=True`. The response includes a `task_id`.
+2. Continue: call the same tool with `task_id=<id>` and `cmd`/`command` set to the input text. The input is sent to the process stdin and the accumulated output is returned in the same call.
+3. Wait for a prompt: supply `wait_for_pattern` with a regex; the tool blocks up to `timeout` until the pattern appears.
+4. Close: send the shell-specific exit command (e.g., `exit`) via `task_id` + `cmd`/`command`.
+
+`TaskOutput` remains available as a fallback to read, list, export, or kill background tasks without sending input.
 
 ---
 
@@ -148,9 +151,9 @@ Embed tool guidelines in system prompts.
 5. `Run` tests
 
 **Interactive command:**
-1. `Run` to start (timeout → background task)
-2. `TaskOutput` to read prompts
-3. `Input` to respond
+1. `Bash` / `Powershell` / `Run` to start a session (timeout → background task)
+2. Reuse the same tool with `task_id` and `wait_for_pattern` to exchange input/output
+3. `TaskOutput` as a fallback to read or kill tasks
 4. Loop until complete
 
 **Multi-file feature:**
@@ -202,6 +205,6 @@ After invoking the command, type your requirement. End input with `/end`, or can
 
 1. **Observe first**: `ReadFile` / `Grep` / `Glob` before modifying
 2. **Minimize changes**: `EditFile` preferred; `WriteFile` only for new files or full rewrites
-3. **Async long tasks**: `Run` timeout → background, manage via `TaskOutput` / `Input`
+3. **Async long tasks**: `Run` timeout → background, manage via `TaskOutput`
 4. **Integrate external info**: `FetchURL` for docs and references
 5. **Plan before build**: use `/plan` for complex tasks to separate design from implementation

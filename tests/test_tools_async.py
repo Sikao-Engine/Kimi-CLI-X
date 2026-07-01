@@ -23,7 +23,6 @@ from kimix.tools.background.utils import (
 )
 from kimix.tools.background import TaskOutput, TaskOutputParams
 from kimix.tools.py import Python, Params as PyParams
-from kimix.tools.file.input import Input, InputParams
 
 
 @pytest.fixture
@@ -180,48 +179,6 @@ class TestPython:
         assert "dest_out" in dest.read_text(encoding="utf-8")
         assert "exported to" in str(result.output)
 
-
-# ---------------------------------------------------------------------------
-# Input tool
-# ---------------------------------------------------------------------------
-class TestInput:
-    async def test_not_found(self, mock_session: MagicMock) -> None:
-        tool = Input(session=mock_session)
-        result = await tool(InputParams(task_id="missing", text="hello"))
-        assert "not found" in str(result.message).lower()
-
-    async def test_send_input_to_running_process(self, mock_session: MagicMock) -> None:
-        from kimix.tools.common import ProcessTask
-
-        task = ProcessTask(
-            sys.executable,
-            ["-c", "import sys; line=sys.stdin.readline(); print('got', line.strip())"],
-        )
-        tid = await task.start(mock_session, kind="run", name="input_test")
-        await asyncio.sleep(0.2)
-
-        tool = Input(session=mock_session)
-        result = await tool(InputParams(task_id=tid, text="hello\n"))
-        assert "sent" in str(result.output).lower()
-
-        await task.wait(timeout=5)
-        output = await task.stream.get_output()
-        assert "got hello" in output
-        remove_task_id(mock_session, tid)
-
-    async def test_input_fails_when_no_stdin(self, mock_session: MagicMock) -> None:
-        from kimix.tools.common import ProcessTask
-
-        # process that exits quickly
-        task = ProcessTask(sys.executable, ["-c", "print('done')"])
-        tid = await task.start(mock_session, kind="run", name="quick")
-        await task.wait(timeout=5)
-
-        tool = Input(session=mock_session)
-        result = await tool(InputParams(task_id=tid, text="data"))
-        # Input may fail because process already finished
-        assert "failed" in str(result.message).lower() or "sent" in str(result.output).lower()
-        remove_task_id(mock_session, tid)
 
 
 # ---------------------------------------------------------------------------

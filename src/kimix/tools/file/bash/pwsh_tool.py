@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import functools
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -11,13 +12,19 @@ from typing import TYPE_CHECKING
 
 import kimi_cli
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from kimi_cli.session import Session
 from kimi_cli.tools import SkipThisTool
 from kimi_cli.tools.display import ShellDisplayBlock
 from kimix.tools.file.bash import bash_tool as _bash_tool
 from kimix.tools.file.bash.proccess_pwsh import pwsh_transform
-from kimix.tools.common import _maybe_export_output_async, _summarize_long_output_async, ProcessTask
+from kimix.tools.common import (
+    _build_session_output_block,
+    _extract_export_path,
+    _maybe_export_output_async,
+    _summarize_long_output_async,
+    ProcessTask,
+)
 
 if TYPE_CHECKING:
     from kimi_agent_sdk import CallableTool2 as _CallableTool2
@@ -126,7 +133,7 @@ def find_pwsh() -> str | None:
 class PowershellParams(BaseModel):
     """Parameters for the Powershell tool — execute a PowerShell command."""
 
-    cmd: str = Field(description="PowerShell command.")
+    cmd: str = Field(default="", description="PowerShell command or input text for an existing session.")
     timeout: int = Field(
         default=10,
         ge=3,
@@ -138,11 +145,47 @@ class PowershellParams(BaseModel):
         ge=0,
         description="Output length threshold. Exceeding it sends the output to an anonymous sub-agent for summarization. 0 disables."
     )
+    interactive: bool = Field(
+        default=False,
+        description=(
+            "Run PowerShell interactively. "
+            "The process stays alive and accepts further input via task_id. "
+            "Returns a task_id immediately; use TaskOutput to read output."
+        ),
+    )
+    task_id: str | None = Field(
+        default=None,
+        description=(
+            "Existing session/task ID to continue. When provided, 'cmd' is sent to the "
+            "process stdin instead of being executed."
+        ),
+    )
+    wait_for_pattern: str | None = Field(
+        default=None,
+        description=(
+            "Optional regex pattern. After starting or sending input, the tool blocks up "
+            "to 'timeout' seconds until the pattern appears in output."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_cmd(self) -> "PowershellParams":
+        if self.task_id is None and not self.interactive and not self.cmd:
+            raise ValueError("cmd cannot be empty unless interactive=True")
+        if self.task_id is not None and not self.cmd:
+            raise ValueError("cmd cannot be empty when continuing a session via task_id")
+        return self
 
 class Powershell(CallableTool2[PowershellParams]):
 
     name: str = "Powershell"
-    description: str = "Run a simple powershell command. Prefer Python for complex or stateful tasks. "
+    description: str = (
+        "Run a simple PowerShell command. Prefer Python for complex or stateful tasks. "
+        "Start a persistent session with interactive=True, then reuse the same tool with "
+        "task_id=<id> to send input and read output in one step. Use wait_for_pattern to wait "
+        "for a prompt. TaskOutput remains available as a fallback for listing/monitoring tasks. "
+        "Send 'exit' to close the session."
+    )
     params: type[PowershellParams] = PowershellParams
 
     def __init__(self, session: Session):
@@ -180,10 +223,10 @@ class Powershell(CallableTool2[PowershellParams]):
         Returns:
             ToolOk on success, ToolError on failure or timeout.
         """
-        from kimix.tools.background.utils import remove_task_id
+        if params.task_id is not None:
+            return await self._continue_session(params)
 
-
-        if not params.cmd:
+        if not params.interactive and not params.cmd:
             return ToolError(
                 output="Empty command.",
                 message="No command specified.",
@@ -204,7 +247,11 @@ class Powershell(CallableTool2[PowershellParams]):
                 transform_warning = '\n[WARNING]' + warning_lines
             executable = "powershell"
 
-        if self._forbidden_keywords:
+        pattern = self._compile_pattern(params.wait_for_pattern)
+        if isinstance(pattern, ToolError):
+            return pattern
+
+        if params.cmd and self._forbidden_keywords:
             # PowerShell is case-insensitive: compare lowercased strings.
             normalized_cmd = " ".join(cmd.split()).lower()
             for keyword in self._forbidden_keywords:
@@ -220,18 +267,66 @@ class Powershell(CallableTool2[PowershellParams]):
             from kimix.utils.windows_env import refresh_env_from_registry
             refresh_env_from_registry()
 
+        if params.interactive:
+            ps_args = ["-NoP", "-Exec", "Bypass", "-NoL"]
+            if cmd:
+                ps_args.extend(["-NoExit", "-Command", cmd])
+            else:
+                ps_args.append("-NoExit")
+            process_task = ProcessTask(executable, ps_args, None, None, append_newline=True)
+            task_id = await process_task.start(self._session, "pwsh")
+            if params.wait_for_pattern is not None and process_task.stream is not None:
+                output, matched, elapsed = await process_task.stream.wait_for_output(
+                    timeout=params.timeout, pattern=pattern
+                )
+                alive = await process_task.thread_is_alive()
+                status = "running" if alive else "completed"
+                return await self._format_session_result(
+                    task_id, process_task.stream, params, output, status,
+                    wait_matched=matched, elapsed_seconds=elapsed,
+                    message=(
+                        f"Interactive PowerShell started. task_id: `{task_id}`. "
+                        "Send 'exit' to close the session."
+                    ) + transform_warning,
+                    brief="Interactive PowerShell started",
+                )
+            return ToolOk(
+                output="",
+                message=(
+                    f"Interactive PowerShell started. task_id: `{task_id}`. "
+                    "Use task_id to send commands and TaskOutput to read results. "
+                    "Send 'exit' to close the session."
+                ) + transform_warning,
+                brief="Interactive PowerShell started",
+            )
+
         # Build the command line to pass to PowerShell -Command
         process_task = ProcessTask(executable, ["-NoP", "-NonI", "-Exec", "Bypass", "-NoL", "-C", "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;", cmd], None, None)
         task_id = await process_task.start(self._session, "pwsh")
 
+        wait_matched: bool | None = None
+        elapsed_seconds: float | None = None
         try:
-            await process_task.wait(params.timeout)
+            if params.wait_for_pattern is not None and process_task.stream is not None:
+                output, wait_matched, elapsed_seconds = await process_task.stream.wait_for_output(
+                    timeout=params.timeout, pattern=pattern
+                )
+                if await process_task.thread_is_alive():
+                    return await self._format_session_result(
+                        task_id, process_task.stream, params, output, "running",
+                        wait_matched=wait_matched, elapsed_seconds=elapsed_seconds,
+                        message=f"`{cmd}` matched pattern and is still running." + transform_warning,
+                        brief="Pattern matched",
+                    )
+            else:
+                await process_task.wait(params.timeout)
         except asyncio.CancelledError:
             # The tool call was cancelled (e.g. by a tool-level timeout or
             # shutdown). Stop the subprocess and return a tool error so the
             # conversation stream can continue.
             with contextlib.suppress(asyncio.CancelledError):
                 await process_task.stop()
+            from kimix.tools.background.utils import remove_task_id
             remove_task_id(self._session, task_id)
             output = await process_task.stream.get_output() if process_task.stream else ""
             transform_warning = transform_warning or ""
@@ -245,26 +340,147 @@ class Powershell(CallableTool2[PowershellParams]):
             output = await process_task.stream.get_output() if process_task.stream else ""
             return ToolError(
                 output=output,
-                message=f"`{cmd}` Running in background. task_id: `{task_id}`. use `TaskOutput` or `Input`." + transform_warning,
+                message=f"`{cmd}` Running in background. task_id: `{task_id}`. use `TaskOutput`." + transform_warning,
                 brief="Timeout",
             )
 
+        from kimix.tools.background.utils import remove_task_id
         remove_task_id(self._session, task_id)
 
         output = await process_task.stream.pop_output() if process_task.stream else ""
         success = await process_task.stream.success() if process_task.stream else False
 
         if not success:
-            if params.max_output_length > 0 and len(output) > params.max_output_length:
-                output = await _summarize_long_output_async(self._session, cmd, output)
-            return ToolError(output=output, message=f"`{cmd}` failed." + transform_warning, brief="Command execution failed")
+            processed, output_path, output_truncated = await self._process_output(cmd, params, output)
+            block = _build_session_output_block(
+                task_id=task_id,
+                status="completed",
+                output=processed,
+                exit_code=None,
+                wait_matched=wait_matched,
+                elapsed_seconds=elapsed_seconds,
+                output_path=output_path,
+                output_truncated=output_truncated,
+            )
+            return ToolError(output=block, message=f"`{cmd}` failed." + transform_warning, brief="Command execution failed")
 
-        if params.max_output_length > 0 and len(output) > params.max_output_length:
-            output = await _summarize_long_output_async(self._session, cmd, output)
-        output = await _maybe_export_output_async(output)
+        processed, output_path, output_truncated = await self._process_output(cmd, params, output)
+        block = _build_session_output_block(
+            task_id=task_id,
+            status="completed",
+            output=processed,
+            exit_code=0,
+            wait_matched=wait_matched,
+            elapsed_seconds=elapsed_seconds,
+            output_path=output_path,
+            output_truncated=output_truncated,
+        )
         return ToolOk(
-            output=output,
+            output=block,
             message=f'`{cmd}` success.' + transform_warning,
             brief=f"Command executed successfully",
             display_block=ShellDisplayBlock(language="powershell", command=cmd),
         )
+
+    def _compile_pattern(self, wait_for_pattern: str | None) -> re.Pattern[str] | ToolError:
+        if wait_for_pattern is None:
+            return None
+        try:
+            return re.compile(wait_for_pattern)
+        except re.error as e:
+            return ToolError(
+                output="",
+                message=f"Invalid wait_for_pattern: {e}",
+                brief="Invalid pattern",
+            )
+
+    async def _continue_session(self, params: PowershellParams) -> ToolReturnValue:
+        """Send input to an existing PowerShell session and optionally wait for output."""
+        from kimix.tools.background.utils import get_all_tasks
+
+        tasks = get_all_tasks(self._session)
+        task_id = params.task_id.strip() if params.task_id else ""
+        stream = tasks.get(task_id)
+        if stream is None:
+            started = [tid for tid, s in tasks.items() if await s.is_started()]
+            if not started:
+                return ToolError(
+                    output="",
+                    message=f"Task '{params.task_id}' not found. No running tasks.",
+                    brief="Task not found",
+                )
+            return ToolError(
+                output="",
+                message=(
+                    f"Task '{params.task_id}' not found. "
+                    f"Available tasks: [{', '.join(started)}]"
+                ),
+                brief=f"Task '{params.task_id}' not found",
+            )
+
+        pattern = self._compile_pattern(params.wait_for_pattern)
+        if isinstance(pattern, ToolError):
+            return pattern
+
+        await stream.pop_output()
+
+        input_text = params.cmd
+        if not input_text.endswith("\n"):
+            input_text += "\n"
+        if not await stream.input(input_text):
+            return ToolError(
+                output="",
+                message=f"Failed to send input to task '{task_id}'",
+                brief="Send input failed",
+            )
+
+        output, matched, elapsed = await stream.wait_for_output(
+            timeout=params.timeout, pattern=pattern
+        )
+        alive = await stream.thread_is_alive()
+        status = "running" if alive else "completed"
+        return await self._format_session_result(
+            task_id, stream, params, output, status,
+            wait_matched=matched, elapsed_seconds=elapsed,
+            message=f"Data sent to `{task_id}`. Status: {status}.",
+            brief="Data sent and output retrieved",
+        )
+
+    async def _process_output(
+        self, command: str, params: PowershellParams, output: str
+    ) -> tuple[str, str | None, bool]:
+        """Summarize/export long output and return (display_output, path, truncated)."""
+        output_truncated = False
+        if params.max_output_length > 0 and len(output) > params.max_output_length:
+            output = await _summarize_long_output_async(self._session, command, output)
+            output_truncated = True
+        output = await _maybe_export_output_async(output)
+        output_path = _extract_export_path(output)
+        return output, output_path, output_truncated
+
+    async def _format_session_result(
+        self,
+        task_id: str,
+        stream: 'BackgroundStream' | None,
+        params: PowershellParams,
+        output: str,
+        status: str,
+        *,
+        wait_matched: bool | None,
+        elapsed_seconds: float | None,
+        message: str,
+        brief: str,
+    ) -> ToolReturnValue:
+        """Build a ToolOk response with a structured output block."""
+        processed, output_path, output_truncated = await self._process_output(params.cmd, params, output)
+        block = _build_session_output_block(
+            task_id=task_id,
+            status=status,
+            output=processed,
+            exit_code=None if status != "completed" else (0 if await stream.success() else None),
+            wait_matched=wait_matched,
+            elapsed_seconds=elapsed_seconds,
+            output_path=output_path,
+            output_truncated=output_truncated,
+        )
+        return ToolOk(output=block, message=message, brief=brief)

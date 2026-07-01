@@ -1,0 +1,351 @@
+"""Tests for the PowerShell tool interactive mode and shared ProcessTask behavior."""
+
+import asyncio
+import sys
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from kimi_agent_sdk import ToolError, ToolOk
+from kimi_cli.session import Session
+from kimi_cli.tools import SkipThisTool
+
+from kimix.tools.common import ProcessTask
+from kimix.tools.file.bash import Powershell
+from kimix.tools.file.bash.pwsh_tool import PowershellParams, find_pwsh
+from kimix.tools.background.utils import TaskData, _pop_task_data
+
+
+def _pwsh_is_available() -> bool:
+    """Return True when Powershell can be instantiated on this platform."""
+    try:
+        Powershell(session=MagicMock(spec=Session))
+        return True
+    except SkipThisTool:
+        return False
+
+
+PWSH_AVAILABLE = _pwsh_is_available()
+
+
+@pytest.fixture
+def mock_session() -> MagicMock:
+    session = MagicMock(spec=Session)
+    session.custom_data = {}
+    session.custom_config.get.return_value = {}
+    return session
+
+
+@pytest.fixture(autouse=True)
+def cleanup_task_data(mock_session: MagicMock) -> Any:
+    yield
+    _pop_task_data(mock_session)
+
+
+# ============================================================================
+# PowershellParams validation
+# ============================================================================
+
+class TestPowershellParams:
+    def test_cmd_only_succeeds(self) -> None:
+        p = PowershellParams(cmd="Get-Location")
+        assert p.cmd == "Get-Location"
+        assert p.interactive is False
+
+    def test_empty_cmd_non_interactive_raises(self) -> None:
+        with pytest.raises(ValueError):
+            PowershellParams(cmd="", interactive=False)
+
+    def test_empty_cmd_interactive_succeeds(self) -> None:
+        p = PowershellParams(cmd="", interactive=True)
+        assert p.cmd == ""
+        assert p.interactive is True
+
+    def test_cmd_and_interactive_succeeds(self) -> None:
+        p = PowershellParams(cmd="Get-Location", interactive=True)
+        assert p.cmd == "Get-Location"
+        assert p.interactive is True
+
+
+# ============================================================================
+# Argument building
+# ============================================================================
+
+class TestPowershellArgumentBuilding:
+    @pytest.fixture
+    def mock_session(self) -> MagicMock:
+        session = MagicMock(spec=Session)
+        session.custom_data = {}
+        session.custom_config.get.return_value = {}
+        return session
+
+    async def test_non_interactive_args(self, mock_session: MagicMock) -> None:
+        with patch("kimix.tools.file.bash.pwsh_tool.find_pwsh", return_value=r"C:\pwsh\pwsh.exe"):
+            pwsh = Powershell(session=mock_session)
+
+        with patch("kimix.tools.file.bash.pwsh_tool.ProcessTask") as mock_pt:
+            mock_instance = MagicMock()
+            mock_instance.start = MagicMock(return_value=asyncio.Future())
+            mock_instance.start.return_value.set_result("pwsh-test-id")
+            mock_instance.wait = MagicMock(return_value=asyncio.Future())
+            mock_instance.wait.return_value.set_result(None)
+            mock_instance.thread_is_alive = MagicMock(return_value=asyncio.Future())
+            mock_instance.thread_is_alive.return_value.set_result(False)
+            mock_instance.stream = MagicMock()
+            mock_instance.stream.pop_output = MagicMock(return_value=asyncio.Future())
+            mock_instance.stream.pop_output.return_value.set_result("mock output")
+            mock_instance.stream.success = MagicMock(return_value=asyncio.Future())
+            mock_instance.stream.success.return_value.set_result(True)
+            mock_pt.return_value = mock_instance
+
+            params = PowershellParams(cmd="Get-Location")
+            result = await pwsh(params)
+
+            assert isinstance(result, ToolOk)
+            args = mock_pt.call_args
+            assert "-NonI" in args[0][1]
+            assert "-NoExit" not in args[0][1]
+            assert "-Command" in args[0][1] or "-C" in args[0][1]
+            assert args[0][3] is None  # append_newline default False
+
+    async def test_interactive_args_with_cmd(self, mock_session: MagicMock) -> None:
+        with patch("kimix.tools.file.bash.pwsh_tool.find_pwsh", return_value=r"C:\pwsh\pwsh.exe"):
+            pwsh = Powershell(session=mock_session)
+
+        with patch("kimix.tools.file.bash.pwsh_tool.ProcessTask") as mock_pt:
+            mock_instance = MagicMock()
+            mock_instance.start = MagicMock(return_value=asyncio.Future())
+            mock_instance.start.return_value.set_result("pwsh-interactive-id")
+            mock_pt.return_value = mock_instance
+
+            params = PowershellParams(cmd="Read-Host 'Name'", interactive=True)
+            result = await pwsh(params)
+
+            assert isinstance(result, ToolOk)
+            args = mock_pt.call_args
+            ps_args = args[0][1]
+            assert "-NonI" not in ps_args
+            assert "-NoExit" in ps_args
+            assert "-Command" in ps_args or "-C" in ps_args
+            assert "Read-Host 'Name'" in ps_args
+            assert args.kwargs.get("append_newline") is True or args[0][4] is True
+
+    async def test_interactive_args_without_cmd(self, mock_session: MagicMock) -> None:
+        with patch("kimix.tools.file.bash.pwsh_tool.find_pwsh", return_value=r"C:\pwsh\pwsh.exe"):
+            pwsh = Powershell(session=mock_session)
+
+        with patch("kimix.tools.file.bash.pwsh_tool.ProcessTask") as mock_pt:
+            mock_instance = MagicMock()
+            mock_instance.start = MagicMock(return_value=asyncio.Future())
+            mock_instance.start.return_value.set_result("pwsh-interactive-id")
+            mock_pt.return_value = mock_instance
+
+            params = PowershellParams(cmd="", interactive=True)
+            result = await pwsh(params)
+
+            assert isinstance(result, ToolOk)
+            args = mock_pt.call_args
+            ps_args = args[0][1]
+            assert ps_args == ["-NoP", "-Exec", "Bypass", "-NoL", "-NoExit"]
+
+    async def test_interactive_returns_immediately(self, mock_session: MagicMock) -> None:
+        with patch("kimix.tools.file.bash.pwsh_tool.find_pwsh", return_value=r"C:\pwsh\pwsh.exe"):
+            pwsh = Powershell(session=mock_session)
+
+        with patch("kimix.tools.file.bash.pwsh_tool.ProcessTask") as mock_pt:
+            mock_instance = MagicMock()
+            mock_instance.start = MagicMock(return_value=asyncio.Future())
+            mock_instance.start.return_value.set_result("task-123")
+            mock_pt.return_value = mock_instance
+
+            params = PowershellParams(cmd="", interactive=True)
+            result = await pwsh(params)
+
+            assert isinstance(result, ToolOk)
+            assert "task-123" in result.message
+            assert "task_id" in result.message
+            assert "TaskOutput" in result.message
+            mock_instance.wait.assert_not_called()
+
+
+# ============================================================================
+# ProcessTask newline appending
+# ============================================================================
+
+class TestProcessTaskAppendNewline:
+    def test_appends_newline_when_enabled(self) -> None:
+        task = ProcessTask("cmd.exe", ["/c", "echo hello"], append_newline=True)
+        # Drive data through the internal queue by calling input on an unstarted task.
+        # _input_function waits for the process ref; simulate a fake running process.
+        fake_proc = MagicMock()
+        fake_proc.stdin = MagicMock()
+        fake_proc.returncode = None
+        task._process_ref = fake_proc
+
+        async def _send() -> bool:
+            return await task._input_function("hello")
+
+        assert asyncio.run(_send()) is True
+        assert task._input_queue.get_nowait() == "hello\n"
+
+    def test_no_append_when_disabled(self) -> None:
+        task = ProcessTask("cmd.exe", ["/c", "echo hello"], append_newline=False)
+        fake_proc = MagicMock()
+        fake_proc.stdin = MagicMock()
+        fake_proc.returncode = None
+        task._process_ref = fake_proc
+
+        async def _send() -> bool:
+            return await task._input_function("hello")
+
+        assert asyncio.run(_send()) is True
+        assert task._input_queue.get_nowait() == "hello"
+
+    def test_no_double_newline(self) -> None:
+        task = ProcessTask("cmd.exe", ["/c", "echo hello"], append_newline=True)
+        fake_proc = MagicMock()
+        fake_proc.stdin = MagicMock()
+        fake_proc.returncode = None
+        task._process_ref = fake_proc
+
+        async def _send() -> bool:
+            return await task._input_function("hello\n")
+
+        assert asyncio.run(_send()) is True
+        assert task._input_queue.get_nowait() == "hello\n"
+
+
+# ============================================================================
+# Powershell session continuation / wait_for_pattern
+# ============================================================================
+
+class TestPowershellSessionContinuation:
+    @pytest.fixture
+    def pwsh_instance(self, mock_session: MagicMock) -> Powershell:
+        with patch("kimix.tools.file.bash.pwsh_tool.find_pwsh", return_value=r"C:\pwsh\pwsh.exe"):
+            return Powershell(session=mock_session)
+
+    async def test_continue_nonexistent_task_lists_available(self, pwsh_instance: Powershell) -> None:
+        from unittest.mock import AsyncMock
+
+        data = TaskData()
+        stream = AsyncMock()
+        stream.is_started = AsyncMock(return_value=True)
+        data.tasks = {"pwsh_alive": stream}
+        pwsh_instance._session.custom_data["background_task_data"] = data
+
+        result = await pwsh_instance(PowershellParams(cmd="Write-Host hi", task_id="missing"))
+        assert isinstance(result, ToolError)
+        assert "missing" in result.message
+        assert "pwsh_alive" in result.message
+
+    async def test_invalid_wait_for_pattern_returns_error(self, pwsh_instance: Powershell) -> None:
+        result = await pwsh_instance(PowershellParams(cmd="Get-Date", wait_for_pattern="["))
+        assert isinstance(result, ToolError)
+        assert "Invalid wait_for_pattern" in result.message
+
+    async def test_continue_session_sends_input_and_returns_block(self, pwsh_instance: Powershell) -> None:
+        from unittest.mock import AsyncMock
+
+        data = TaskData()
+        stream = AsyncMock()
+        stream.is_started = AsyncMock(return_value=True)
+        stream.pop_output = AsyncMock(return_value="")
+        stream.input = AsyncMock(return_value=True)
+        stream.wait_for_output = AsyncMock(return_value=("hello output", True, 0.12))
+        stream.thread_is_alive = AsyncMock(return_value=True)
+        stream.success = AsyncMock(return_value=True)
+        data.tasks = {"pwsh_42": stream}
+        pwsh_instance._session.custom_data["background_task_data"] = data
+
+        result = await pwsh_instance(
+            PowershellParams(cmd="Write-Host hello", task_id="pwsh_42", wait_for_pattern="hello")
+        )
+
+        assert isinstance(result, ToolOk)
+        assert "pwsh_42" in result.output
+        assert "status: running" in result.output
+        assert "wait_matched: true" in result.output
+        stream.input.assert_awaited_once_with("Write-Host hello\n")
+
+
+# ============================================================================
+# Integration tests
+# ============================================================================
+
+@pytest.mark.skipif(
+    not PWSH_AVAILABLE,
+    reason="PowerShell tool is not available on this platform",
+)
+class TestPowershellInteractiveIntegration:
+    async def test_interactive_read_host(self, mock_session: MagicMock) -> None:
+        pwsh = Powershell(session=mock_session)
+        params = PowershellParams(cmd="Read-Host -Prompt 'Name'", interactive=True)
+        result = await pwsh(params)
+        assert isinstance(result, ToolOk)
+        task_id = result.message.split("`")[1]
+
+        task_data = mock_session.custom_data.get("background_task_data")
+        assert task_data is not None
+        task = task_data.tasks.get(task_id)
+        assert task is not None
+
+        await task.input("Alice")
+        await asyncio.sleep(0.5)
+        output = await task.get_output()
+        assert "Alice" in output
+
+        await task.input("exit")
+        await task.wait(timeout=5)
+
+    async def test_persistent_repl_session(self, mock_session: MagicMock) -> None:
+        pwsh = Powershell(session=mock_session)
+        params = PowershellParams(cmd="", interactive=True)
+        result = await pwsh(params)
+        assert isinstance(result, ToolOk)
+        task_id = result.message.split("`")[1]
+
+        task_data = mock_session.custom_data.get("background_task_data")
+        assert task_data is not None
+        task = task_data.tasks.get(task_id)
+        assert task is not None
+
+        await task.input("Write-Output hello")
+        await asyncio.sleep(0.5)
+        output = await task.get_output()
+        assert "hello" in output
+
+        await task.input("$x = 42")
+        await asyncio.sleep(0.2)
+        await task.input("Write-Output $x")
+        await asyncio.sleep(0.5)
+        output = await task.get_output()
+        assert "42" in output
+
+        await task.input("exit")
+        await task.wait(timeout=5)
+
+    async def test_non_interactive_unchanged(self, mock_session: MagicMock) -> None:
+        pwsh = Powershell(session=mock_session)
+        params = PowershellParams(cmd="Write-Output noninteractive")
+        result = await pwsh(params)
+        assert isinstance(result, ToolOk)
+        assert "noninteractive" in result.output
+
+    async def test_interactive_start_with_wait_for_pattern(self, mock_session: MagicMock) -> None:
+        pwsh = Powershell(session=mock_session)
+        params = PowershellParams(
+            cmd="Write-Host hello", interactive=True, wait_for_pattern="hello", timeout=10
+        )
+        result = await pwsh(params)
+        assert isinstance(result, ToolOk)
+        assert "pwsh" in result.output
+        assert "status:" in result.output
+        assert "wait_matched: true" in result.output
+        assert "hello" in result.output
+
+        task_id = result.output.split("task_id: ", 1)[1].split("\n", 1)[0]
+        exit_result = await pwsh(PowershellParams(cmd="exit", task_id=task_id, timeout=5))
+        assert isinstance(exit_result, ToolOk)
+        assert "status: completed" in exit_result.output

@@ -884,7 +884,6 @@ All tools are `CallableTool2` subclasses. Key ones:
 - `BackgroundStream` — `start(function, stop_function, input_function=None)`, `wait(timeout=None)`, `stop()`, `get_output()`, `pop_output()`, `input(data)`, `success()`
 - `Bash` / `Powershell` — shell execution; params: `cmd`, `timeout=10`
 - `Run` — run external executable; params: `command`, `timeout=10`, `output_path`, `cwd`, `env`, `run_in_background=False`
-- `Input` — send text to background process stdin; params: `task_id`, `text`
 - `FindStr` — search text in files; params: `content`, `path`, `case_sensitive=False`
 - `Mkdir` / `Rm` — create/remove directories
 - `Python` — execute Python code; params: `code`, `output_path`, `timeout=10`, `run_in_background=False`

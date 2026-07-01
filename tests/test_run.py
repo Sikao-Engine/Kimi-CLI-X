@@ -1,0 +1,135 @@
+"""Tests for the Run tool session continuation and wait_for_pattern support."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from kimi_agent_sdk import ToolError, ToolOk
+from kimi_cli.session import Session
+from kimi_cli.tools import SkipThisTool
+
+from kimix.tools.background.utils import TaskData
+from kimix.tools.file.run import Run, RunParams
+
+
+def _run_instance(session: Session) -> Run:
+    """Create a Run instance even when the platform would normally skip it."""
+    with (
+        patch("kimix.tools.file.run.USE_SYSTEM_SHELL", True),
+        patch("kimix.tools.file.run.USE_SYSTEM_PWSH_ON_WINDOWS", False),
+        patch("kimix.tools.file.run.find_bash", return_value=None),
+    ):
+        return Run(session=session)
+
+
+@pytest.fixture
+def mock_session() -> MagicMock:
+    session = MagicMock(spec=Session)
+    session.custom_data = {}
+    session.custom_config.get.return_value = {}
+    return session
+
+
+class TestRunParams:
+    def test_task_id_with_command_succeeds(self) -> None:
+        p = RunParams(command="hello", task_id="run_0")
+        assert p.task_id == "run_0"
+        assert p.command == "hello"
+
+    def test_wait_for_pattern_optional(self) -> None:
+        p = RunParams(command="hello", wait_for_pattern="done")
+        assert p.wait_for_pattern == "done"
+
+
+class TestRunContinueSession:
+    async def test_continue_nonexistent_task_lists_available(self, mock_session: MagicMock) -> None:
+        run = _run_instance(mock_session)
+        data = TaskData()
+        stream = AsyncMock()
+        stream.is_started = AsyncMock(return_value=True)
+        data.tasks = {"run_alive": stream}
+        run._session.custom_data["background_task_data"] = data
+
+        result = await run(RunParams(command="hi", task_id="missing"))
+        assert isinstance(result, ToolError)
+        assert "missing" in result.message
+        assert "run_alive" in result.message
+
+    async def test_invalid_wait_for_pattern_returns_error(self, mock_session: MagicMock) -> None:
+        run = _run_instance(mock_session)
+        result = await run(RunParams(command="hi", wait_for_pattern="["))
+        assert isinstance(result, ToolError)
+        assert "Invalid wait_for_pattern" in result.message
+
+    async def test_continue_session_sends_input_and_returns_block(self, mock_session: MagicMock) -> None:
+        run = _run_instance(mock_session)
+        data = TaskData()
+        stream = AsyncMock()
+        stream.is_started = AsyncMock(return_value=True)
+        stream.pop_output = AsyncMock(return_value="")
+        stream.input = AsyncMock(return_value=True)
+        stream.wait_for_output = AsyncMock(return_value=("process output", True, 0.12))
+        stream.thread_is_alive = AsyncMock(return_value=True)
+        stream.success = AsyncMock(return_value=True)
+        data.tasks = {"run_42": stream}
+        run._session.custom_data["background_task_data"] = data
+
+        result = await run(
+            RunParams(command="input line", task_id="run_42", wait_for_pattern="output")
+        )
+
+        assert isinstance(result, ToolOk)
+        assert "run_42" in result.output
+        assert "status: running" in result.output
+        assert "wait_matched: true" in result.output
+        stream.input.assert_awaited_once_with("input line\n")
+
+
+class TestRunStartModes:
+    async def test_one_shot_command_still_works(self, mock_session: MagicMock) -> None:
+        run = _run_instance(mock_session)
+        with (
+            patch("kimix.tools.file.run.ProcessTask") as mock_pt,
+            patch("kimix.tools.file.run.shutil.which", return_value="/fake/python"),
+            patch("kimix.tools.file.run.Path.is_file", return_value=True),
+        ):
+            instance = MagicMock()
+            instance.start = AsyncMock(return_value="run_test")
+            instance.wait = AsyncMock(return_value=None)
+            instance.thread_is_alive = AsyncMock(return_value=False)
+            instance.stream = AsyncMock()
+            instance.stream.pop_output = AsyncMock(return_value="mock output")
+            instance.stream.success = AsyncMock(return_value=True)
+            mock_pt.return_value = instance
+
+            result = await run(RunParams(command="python -c print(1)"))
+
+            assert isinstance(result, ToolOk)
+            assert "run_test" in result.output
+            assert "status: completed" in result.output
+            assert "mock output" in result.output
+
+    async def test_background_with_wait_for_pattern(self, mock_session: MagicMock) -> None:
+        run = _run_instance(mock_session)
+        with (
+            patch("kimix.tools.file.run.ProcessTask") as mock_pt,
+            patch("kimix.tools.file.run.shutil.which", return_value="/fake/python"),
+            patch("kimix.tools.file.run.Path.is_file", return_value=True),
+        ):
+            instance = MagicMock()
+            instance.start = AsyncMock(return_value="run_bg")
+            instance.stream = AsyncMock()
+            instance.stream.wait_for_output = AsyncMock(return_value=("ready", True, 0.05))
+            instance.stream.thread_is_alive = AsyncMock(return_value=True)
+            mock_pt.return_value = instance
+
+            result = await run(
+                RunParams(command="python -c print('ready')", run_in_background=True, wait_for_pattern="ready")
+            )
+
+            assert isinstance(result, ToolOk)
+            assert "run_bg" in result.output
+            assert "status: running" in result.output
+            assert "wait_matched: true" in result.output

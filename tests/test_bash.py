@@ -1,5 +1,6 @@
 """Comprehensive tests for the Bash tool (bash_tool.py) which uses the system bash executable."""
 
+import asyncio
 import os
 import sys
 from contextlib import ExitStack
@@ -28,7 +29,7 @@ from kimix.tools.file.bash.bash_tool import (
     _git_install_root_from_exec_path,
     _where_git_executables,
 )
-from kimix.tools.background.utils import _pop_task_data
+from kimix.tools.background.utils import TaskData, _pop_task_data
 
 
 def _bash_is_available() -> bool:
@@ -1403,3 +1404,241 @@ class TestComplexCommands:
         result = await bash(params)
         assert isinstance(result, ToolOk)
         assert "a;b" in result.output
+
+
+
+# ============================================================================
+# BashParams interactive validation
+# ============================================================================
+
+class TestBashParamsInteractive:
+    def test_empty_cmd_non_interactive_raises(self) -> None:
+        with pytest.raises(ValueError):
+            BashParams(cmd="", interactive=False)
+
+    def test_empty_cmd_interactive_succeeds(self) -> None:
+        p = BashParams(cmd="", interactive=True)
+        assert p.cmd == ""
+        assert p.interactive is True
+
+    def test_cmd_and_interactive_succeeds(self) -> None:
+        p = BashParams(cmd="ls", interactive=True)
+        assert p.cmd == "ls"
+        assert p.interactive is True
+
+
+# ============================================================================
+# Bash interactive argument building
+# ============================================================================
+
+class TestBashInteractiveArgumentBuilding:
+    @pytest.fixture
+    def mock_session(self) -> MagicMock:
+        session = MagicMock(spec=Session)
+        session.custom_data = {}
+        session.custom_config.get.return_value = {}
+        return session
+
+    async def test_non_interactive_args(self, mock_session: MagicMock) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.find_bash", return_value=r"C:\Git\bin\bash.exe"), patch(
+            "kimix.tools.file.bash.bash_tool._should_enable_bash", return_value=True
+        ):
+            bash = Bash(session=mock_session)
+
+        with patch("kimix.tools.file.bash.bash_tool.ProcessTask") as mock_pt:
+            mock_instance = MagicMock()
+            mock_instance.start = MagicMock(return_value=asyncio.Future())
+            mock_instance.start.return_value.set_result("bash-test-id")
+            mock_instance.wait = MagicMock(return_value=asyncio.Future())
+            mock_instance.wait.return_value.set_result(None)
+            mock_instance.thread_is_alive = MagicMock(return_value=asyncio.Future())
+            mock_instance.thread_is_alive.return_value.set_result(False)
+            mock_instance.stream = MagicMock()
+            mock_instance.stream.pop_output = MagicMock(return_value=asyncio.Future())
+            mock_instance.stream.pop_output.return_value.set_result("mock output")
+            mock_instance.stream.success = MagicMock(return_value=asyncio.Future())
+            mock_instance.stream.success.return_value.set_result(True)
+            mock_pt.return_value = mock_instance
+
+            params = BashParams(cmd="echo hello")
+            result = await bash(params)
+
+            assert isinstance(result, ToolOk)
+            args = mock_pt.call_args
+            assert args[0][1] == ["-c", "echo hello"]
+
+    async def test_interactive_args_with_cmd(self, mock_session: MagicMock) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.find_bash", return_value=r"C:\Git\bin\bash.exe"), patch(
+            "kimix.tools.file.bash.bash_tool._should_enable_bash", return_value=True
+        ):
+            bash = Bash(session=mock_session)
+
+        with patch("kimix.tools.file.bash.bash_tool.ProcessTask") as mock_pt:
+            mock_instance = MagicMock()
+            mock_instance.start = MagicMock(return_value=asyncio.Future())
+            mock_instance.start.return_value.set_result("bash-interactive-id")
+            mock_pt.return_value = mock_instance
+
+            params = BashParams(cmd="echo start", interactive=True)
+            result = await bash(params)
+
+            assert isinstance(result, ToolOk)
+            args = mock_pt.call_args
+            bash_args = args[0][1]
+            assert "-c" in bash_args
+            assert "echo start" in bash_args[1]
+            assert "exec bash -i" in bash_args[1]
+            assert args.kwargs.get("append_newline") is True or args[0][4] is True
+
+    async def test_interactive_args_without_cmd(self, mock_session: MagicMock) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.find_bash", return_value=r"C:\Git\bin\bash.exe"), patch(
+            "kimix.tools.file.bash.bash_tool._should_enable_bash", return_value=True
+        ):
+            bash = Bash(session=mock_session)
+
+        with patch("kimix.tools.file.bash.bash_tool.ProcessTask") as mock_pt:
+            mock_instance = MagicMock()
+            mock_instance.start = MagicMock(return_value=asyncio.Future())
+            mock_instance.start.return_value.set_result("bash-interactive-id")
+            mock_pt.return_value = mock_instance
+
+            params = BashParams(cmd="", interactive=True)
+            result = await bash(params)
+
+            assert isinstance(result, ToolOk)
+            args = mock_pt.call_args
+            assert args[0][1] == ["-i"]
+
+    async def test_interactive_returns_immediately(self, mock_session: MagicMock) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.find_bash", return_value=r"C:\Git\bin\bash.exe"), patch(
+            "kimix.tools.file.bash.bash_tool._should_enable_bash", return_value=True
+        ):
+            bash = Bash(session=mock_session)
+
+        with patch("kimix.tools.file.bash.bash_tool.ProcessTask") as mock_pt:
+            mock_instance = MagicMock()
+            mock_instance.start = MagicMock(return_value=asyncio.Future())
+            mock_instance.start.return_value.set_result("task-456")
+            mock_pt.return_value = mock_instance
+
+            params = BashParams(cmd="", interactive=True)
+            result = await bash(params)
+
+            assert isinstance(result, ToolOk)
+            assert "task-456" in result.message
+            assert "task_id" in result.message
+            assert "TaskOutput" in result.message
+            mock_instance.wait.assert_not_called()
+
+
+# ============================================================================
+# Bash session continuation / wait_for_pattern
+# ============================================================================
+
+class TestBashSessionContinuation:
+    @pytest.fixture
+    def bash_instance(self, mock_session: MagicMock) -> Bash:
+        with patch("kimix.tools.file.bash.bash_tool.find_bash", return_value=r"C:\Git\bin\bash.exe"), patch(
+            "kimix.tools.file.bash.bash_tool._should_enable_bash", return_value=True
+        ):
+            return Bash(session=mock_session)
+
+    async def test_continue_nonexistent_task_lists_available(self, bash_instance: Bash) -> None:
+        from unittest.mock import AsyncMock
+
+        data = TaskData()
+        stream1 = AsyncMock()
+        stream1.is_started = AsyncMock(return_value=True)
+        stream2 = AsyncMock()
+        stream2.is_started = AsyncMock(return_value=False)
+        data.tasks = {"bash_alive": stream1, "bash_dead": stream2}
+        bash_instance._session.custom_data["background_task_data"] = data
+
+        result = await bash_instance(BashParams(cmd="echo hi", task_id="missing"))
+        assert isinstance(result, ToolError)
+        assert "missing" in result.message
+        assert "bash_alive" in result.message
+        assert "bash_dead" not in result.message
+
+    async def test_continue_nonexistent_task_no_tasks(self, bash_instance: Bash) -> None:
+        result = await bash_instance(BashParams(cmd="echo hi", task_id="missing"))
+        assert isinstance(result, ToolError)
+        assert "No running tasks" in result.message
+
+    async def test_invalid_wait_for_pattern_returns_error(self, bash_instance: Bash) -> None:
+        result = await bash_instance(BashParams(cmd="echo hi", wait_for_pattern="["))
+        assert isinstance(result, ToolError)
+        assert "Invalid wait_for_pattern" in result.message
+
+    async def test_continue_session_sends_input_and_returns_block(self, bash_instance: Bash) -> None:
+        from unittest.mock import AsyncMock
+
+        data = TaskData()
+        stream = AsyncMock()
+        stream.is_started = AsyncMock(return_value=True)
+        stream.pop_output = AsyncMock(return_value="")
+        stream.input = AsyncMock(return_value=True)
+        stream.wait_for_output = AsyncMock(return_value=("hello output", True, 0.12))
+        stream.thread_is_alive = AsyncMock(return_value=True)
+        stream.success = AsyncMock(return_value=True)
+        data.tasks = {"bash_42": stream}
+        bash_instance._session.custom_data["background_task_data"] = data
+
+        result = await bash_instance(
+            BashParams(cmd="echo hello", task_id="bash_42", wait_for_pattern="hello")
+        )
+
+        assert isinstance(result, ToolOk)
+        assert "bash_42" in result.output
+        assert "status: running" in result.output
+        assert "wait_matched: true" in result.output
+        assert "elapsed_seconds: 0.12" in result.output
+        stream.pop_output.assert_awaited_once()
+        stream.input.assert_awaited_once_with("echo hello\n")
+        stream.wait_for_output.assert_awaited_once()
+
+
+# ============================================================================
+# Bash interactive integration tests
+# ============================================================================
+
+@pytest.mark.skipif(
+    not BASH_AVAILABLE,
+    reason="Bash tool is not available on this platform",
+)
+class TestBashInteractiveIntegration:
+    async def test_interactive_echo(self, mock_session: MagicMock) -> None:
+        bash = Bash(session=mock_session)
+        params = BashParams(cmd="", interactive=True)
+        result = await bash(params)
+        assert isinstance(result, ToolOk)
+        task_id = result.message.split("`")[1]
+
+        task_data = mock_session.custom_data.get("background_task_data")
+        assert task_data is not None
+        task = task_data.tasks.get(task_id)
+        assert task is not None
+
+        await task.input("echo hello")
+        await asyncio.sleep(0.5)
+        output = await task.get_output()
+        assert "hello" in output
+
+        await task.input("exit")
+        await task.wait(timeout=5)
+
+    async def test_interactive_start_with_wait_for_pattern(self, mock_session: MagicMock) -> None:
+        bash = Bash(session=mock_session)
+        params = BashParams(cmd="echo hello", interactive=True, wait_for_pattern="hello", timeout=10)
+        result = await bash(params)
+        assert isinstance(result, ToolOk)
+        assert "bash" in result.output
+        assert "status:" in result.output
+        assert "wait_matched: true" in result.output
+        assert "hello" in result.output
+
+        # Continue with exit to clean up.
+        task_id = result.output.split("task_id: ", 1)[1].split("\n", 1)[0]
+        exit_result = await bash(BashParams(cmd="exit", task_id=task_id, timeout=5))
+        assert isinstance(exit_result, ToolOk)
+        assert "status: completed" in exit_result.output
