@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 import sys
 from pathlib import Path
 
@@ -1052,3 +1054,197 @@ async def test_read_multiple_files_alias_paths(
 
 
 
+# ── Glob support tests ───────────────────────────────────────────────────────
+
+
+class TestReadFileGlob:
+    def _file_headers(self, output: str) -> list[str]:
+        return re.findall(r"======== (.*?) ========", output)
+
+    async def test_read_glob_simple(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """`./*.md` reads all top-level .md files and skips .txt files."""
+        await (temp_work_dir / "a.md").write_text("alpha")
+        await (temp_work_dir / "b.md").write_text("beta")
+        await (temp_work_dir / "c.txt").write_text("gamma")
+
+        result = await read_file_tool(Params(path="./*.md"))
+
+        assert not result.is_error
+        assert "alpha" in result.output
+        assert "beta" in result.output
+        assert "gamma" not in result.output
+        assert len(self._file_headers(result.output)) == 2
+
+    async def test_read_glob_sorted(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """Output order is alphabetical regardless of creation order."""
+        await (temp_work_dir / "z.md").write_text("z")
+        await (temp_work_dir / "a.md").write_text("a")
+        await (temp_work_dir / "m.md").write_text("m")
+
+        result = await read_file_tool(Params(path="*.md"))
+
+        assert not result.is_error
+        names = self._file_headers(result.output)
+        assert names == ["a.md", "m.md", "z.md"]
+
+    async def test_read_glob_subdirectory(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """`docs/*.md` works relative to the working directory."""
+        docs = temp_work_dir / "docs"
+        await docs.mkdir()
+        await (docs / "x.md").write_text("x")
+        await (docs / "y.md").write_text("y")
+
+        result = await read_file_tool(Params(path="docs/*.md"))
+
+        assert not result.is_error
+        assert "x" in result.output
+        assert "y" in result.output
+        assert len(self._file_headers(result.output)) == 2
+
+    async def test_read_glob_absolute_directory(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """Absolute base directory with a glob works."""
+        await (temp_work_dir / "p.md").write_text("p")
+        await (temp_work_dir / "q.md").write_text("q")
+
+        pattern = str(temp_work_dir).replace("\\", "/") + "/*.md"
+        result = await read_file_tool(Params(path=pattern))
+
+        assert not result.is_error
+        assert "p" in result.output
+        assert "q" in result.output
+
+    async def test_read_glob_no_matches(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """`./*.nomatch` returns an error."""
+        result = await read_file_tool(Params(path="./*.nomatch"))
+
+        assert result.is_error
+        assert "No files matched" in result.message
+        assert result.brief == "No matches"
+
+    async def test_read_glob_nonexistent_directory(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """`missing/*.md` returns an error."""
+        result = await read_file_tool(Params(path="missing/*.md"))
+
+        assert result.is_error
+        assert "does not exist" in result.message
+        assert result.brief == "Directory not found"
+
+    async def test_read_glob_outside_workspace_relative(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """`../outside/*.md` is rejected."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            outside = Path(tmpdir) / "outside"
+            outside.mkdir()
+            (outside / "x.md").write_text("x")
+
+            # Change into temp_work_dir so ../outside resolves to the outside dir.
+            original_cwd = Path.cwd()
+            os.chdir(str(temp_work_dir))
+            try:
+                result = await read_file_tool(Params(path="../outside/*.md"))
+            finally:
+                os.chdir(original_cwd)
+
+        assert result.is_error
+        assert "absolute path" in result.message.lower()
+
+    async def test_read_glob_with_literal_files(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """A list mixing a glob and a literal path aggregates correctly."""
+        await (temp_work_dir / "a.md").write_text("a")
+        await (temp_work_dir / "b.md").write_text("b")
+        literal = temp_work_dir / "c.txt"
+        await literal.write_text("c")
+
+        result = await read_file_tool(Params(path=["./*.md", str(literal)]))
+
+        assert not result.is_error
+        assert "a" in result.output
+        assert "b" in result.output
+        assert "c" in result.output
+        assert len(self._file_headers(result.output)) == 3
+
+    async def test_read_glob_options_broadcast(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """`n_lines=1` applied to a glob affects every matched file."""
+        await (temp_work_dir / "a.md").write_text("a1\na2")
+        await (temp_work_dir / "b.md").write_text("b1\nb2")
+
+        result = await read_file_tool(Params(path="*.md", n_lines=1))
+
+        assert not result.is_error
+        assert "     1\ta1" in result.output
+        assert "     1\tb1" in result.output
+        assert "     2\ta2" not in result.output
+        assert "     2\tb2" not in result.output
+
+    async def test_read_glob_deduplicates(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """`path=["a.md", "*.md"]` reads `a.md` only once."""
+        await (temp_work_dir / "a.md").write_text("a")
+        await (temp_work_dir / "b.md").write_text("b")
+
+        result = await read_file_tool(Params(path=["a.md", "*.md"]))
+
+        assert not result.is_error
+        headers = self._file_headers(result.output)
+        assert len(headers) == 2
+        assert headers.count("a.md") == 1
+        assert "b" in result.output
+
+    async def test_read_glob_skips_directories(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """Pattern `*` matches a directory but only files are read."""
+        await (temp_work_dir / "subdir").mkdir()
+        await (temp_work_dir / "file.txt").write_text("file")
+
+        result = await read_file_tool(Params(path="*"))
+
+        assert not result.is_error
+        assert "file" in result.output
+        assert "subdir" not in result.output
+        # Only one file matched, so single-file output format is used.
+        assert result.message.endswith(" Path: file.txt")
+
+    async def test_read_glob_respects_gitignore(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """A `.gitignore` rule excludes matched files from a glob."""
+        await (temp_work_dir / ".gitignore").write_text("ignored.md\n")
+        await (temp_work_dir / "included.md").write_text("included")
+        await (temp_work_dir / "ignored.md").write_text("ignored")
+
+        result = await read_file_tool(Params(path="*.md"))
+
+        assert not result.is_error
+        assert "included" in result.output
+        assert "ignored" not in result.output
+        # Only one file matched, so single-file output format is used.
+        assert result.message.endswith(" Path: included.md")
+
+    async def test_read_glob_rejects_leading_double_star(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """`**/*.md` is rejected as unsafe."""
+        result = await read_file_tool(Params(path="**/*.md"))
+
+        assert result.is_error
+        assert "starts with `**`" in result.message
+        assert result.brief == "Unsafe glob pattern"
+
+    async def test_read_glob_respects_max_files(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """Create MAX_FILES + 1 matching files and verify the call is rejected."""
+        for i in range(MAX_FILES + 1):
+            await (temp_work_dir / f"file{i}.txt").write_text(str(i))
+
+        result = await read_file_tool(Params(path="*.txt"))
+
+        assert result.is_error
+        assert f"Cannot read more than {MAX_FILES} files" in result.message
+        assert result.brief == "Too many files"
+
+    async def test_read_glob_media_file_is_rejected(self, read_file_tool: ReadFile, temp_work_dir: KaosPath):
+        """A glob that matches an image file produces a per-entry error."""
+        await (temp_work_dir / "sample.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"pngdata")
+        await (temp_work_dir / "readme.txt").write_text("hello")
+
+        result = await read_file_tool(Params(path="*"))
+
+        assert not result.is_error
+        assert "hello" in result.output
+        assert "sample.png" in result.output
+        assert "image file" in result.output
+        assert "Read 1 file(s), 1 error(s)" in result.message

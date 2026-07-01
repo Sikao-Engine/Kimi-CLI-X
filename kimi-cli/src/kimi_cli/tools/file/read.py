@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from typing import override
 
@@ -20,6 +21,7 @@ from kimi_cli.utils.path import is_within_workspace, kaos_path_from_user_input
 from kimi_cli.utils.sensitive import is_sensitive_file
 from kimi_cli.vfs import VFS
 
+from .glob import _get_gitignore_rules, _is_ignored_by_gitignore
 from .utils import resolve_vfs
 
 MAX_LINES = 5000
@@ -118,6 +120,36 @@ def _normalize_per_file(value: int | list[int], n: int) -> list[int]:
     return [value] * n
 
 
+_GLOB_META = frozenset("*?[")
+
+
+def _is_glob_pattern(raw: str) -> bool:
+    """Return True if the raw path contains glob metacharacters."""
+    return any(ch in raw for ch in _GLOB_META)
+
+
+def _split_glob_path(raw: str) -> tuple[str, str]:
+    """Return (base_dir, pattern) for a glob path.
+
+    Only the final path component may contain wildcards. If no separator
+    exists before the first metacharacter, the base directory defaults to
+    the current working directory (`.`).
+    """
+    norm = raw.replace("\\", "/")
+    meta_indices = [norm.find(ch) for ch in _GLOB_META]
+    meta_idx = min((idx for idx in meta_indices if idx != -1), default=-1)
+    if meta_idx == -1:
+        raise ValueError("not a glob pattern")
+    sep_idx = norm.rfind("/", 0, meta_idx)
+    if sep_idx == -1:
+        return ".", raw
+    base = raw[:sep_idx]
+    if not base:
+        base = "."
+    pattern = raw[sep_idx + 1 :]
+    return base, pattern
+
+
 class ReadFile(CallableTool2[Params]):
     name: str = "ReadFile"
     params: type[Params] = Params
@@ -141,6 +173,7 @@ class ReadFile(CallableTool2[Params]):
                 "MAX_LINES": MAX_LINES,
                 "MAX_LINE_LENGTH": MAX_LINE_LENGTH,
                 "MAX_BYTES": MAX_BYTES,
+                "MAX_FILES": MAX_FILES,
             },
         )
         super().__init__(description=description)
@@ -177,6 +210,119 @@ class ReadFile(CallableTool2[Params]):
                 )
         return None
 
+    async def _validate_glob_directory(
+        self,
+        dir_path: KaosPath,
+        raw_path: str,
+    ) -> ToolError | None:
+        """Validate that the directory is safe to search for glob expansion."""
+        resolved_path = dir_path.canonical()
+
+        if (
+            not is_within_workspace(resolved_path, self._work_dir, self._additional_dirs)
+            and not dir_path.is_absolute()
+        ):
+            return ToolError(
+                message=(
+                    f"`{raw_path}` is not an absolute path. "
+                    "You must provide an absolute path to read outside the working directory."
+                ),
+                brief="Invalid path",
+            )
+
+        protected_paths = self._session.custom_config.get("config_json", {}).get("protected_read_paths")
+        if protected_paths:
+            from .utils import check_path_protected
+            if matched := check_path_protected(resolved_path, protected_paths, self._work_dir):
+                return ToolError(
+                    message=f"Reading `{raw_path}` is blocked by protected path rule: `{matched}`.",
+                    brief="Protected path",
+                )
+        return None
+
+    async def _expand_glob_path(
+        self,
+        raw_path: str,
+        options: tuple[int, int, int, int],
+    ) -> tuple[list[tuple[str, tuple[int, int, int, int]]], ToolError | None]:
+        """Expand a single glob path into concrete (path_string, options) entries."""
+        base_str, pattern = _split_glob_path(raw_path)
+
+        # Reject recursive patterns that start with **, matching Glob's safety rule.
+        if pattern.replace("\\", "/").startswith("**"):
+            return [], ToolError(
+                message=f"Pattern `{raw_path}` starts with `**`, which is disallowed.",
+                brief="Unsafe glob pattern",
+            )
+
+        try:
+            base = kaos_path_from_user_input(base_str)
+            if err := await self._validate_glob_directory(base, raw_path):
+                return [], err
+
+            base = await resolve_vfs(str(base), self._vfs, for_write=False)
+            if not await base.exists():
+                return [], ToolError(
+                    message=f"Directory for `{raw_path}` does not exist.",
+                    brief="Directory not found",
+                )
+            if not await base.is_dir():
+                return [], ToolError(
+                    message=f"`{raw_path}` is not a directory.",
+                    brief="Invalid path",
+                )
+
+            # Load gitignore rules for the search root.
+            gitignore_rules: list = []
+            try:
+                resolved_base = Path(str(base)).resolve()
+                gitignore_rules = await asyncio.to_thread(
+                    _get_gitignore_rules, resolved_base
+                )
+            except Exception:
+                pass
+
+            matches: list[KaosPath] = []
+            async for match in base.glob(pattern):
+                if not await match.is_file():
+                    continue
+                if gitignore_rules:
+                    try:
+                        match_resolved = Path(str(match)).resolve()
+                        if _is_ignored_by_gitignore(
+                            match_resolved, gitignore_rules, resolved_base
+                        ):
+                            continue
+                    except Exception:
+                        pass
+                matches.append(match)
+
+            matches.sort()
+
+            if not matches:
+                return [], ToolError(
+                    message=f"No files matched pattern `{raw_path}`.",
+                    brief="No matches",
+                )
+
+            # Prefer a path relative to the work dir for display; fall back to absolute.
+            entries: list[tuple[str, tuple[int, int, int, int]]] = []
+            for match in matches:
+                display = str(match)
+                try:
+                    display = str(match.relative_to(self._work_dir))
+                except Exception:
+                    pass
+                entries.append((display, options))
+            return entries, None
+
+        except Exception as e:
+            logger.warning("ReadFile glob expansion failed: {path}: {error}", path=raw_path, error=e)
+            return [], ToolError(
+                message=f"Failed to expand glob `{raw_path}`: {e}",
+                brief="Glob expansion failed",
+            )
+
     @override
     async def __call__(self, params: Params) -> ToolReturnValue:
         raw_paths: list[str] = [params.path] if isinstance(params.path, str) else params.path
@@ -198,35 +344,76 @@ class ReadFile(CallableTool2[Params]):
         max_chars = _normalize_per_file(params.max_char, n)
         char_offsets = _normalize_per_file(params.char_offset, n)
 
-        # Deduplicate paths while preserving order and keeping option entries in sync.
-        seen: set[str] = set()
-        deduped_paths: list[str] = []
-        deduped_options: list[tuple[int, int, int, int]] = []
+        # Expand any glob paths into concrete file entries while preserving order.
+        # Each entry is (display_path, options, canonical_or_error). For file entries
+        # the third item is a canonical path string used for deduplication; for
+        # expansion errors it is the pre-built ToolError.
+        entries: list[tuple[str, tuple[int, int, int, int], str | ToolError]] = []
         for i, raw_path in enumerate(raw_paths):
-            if raw_path not in seen:
-                seen.add(raw_path)
-                deduped_paths.append(raw_path)
-                deduped_options.append(
-                    (line_offsets[i], n_lines_list[i], max_chars[i], char_offsets[i])
+            options = (
+                line_offsets[i],
+                n_lines_list[i],
+                max_chars[i],
+                char_offsets[i],
+            )
+            if not _is_glob_pattern(raw_path):
+                canonical = str(
+                    Path(str(kaos_path_from_user_input(raw_path))).resolve()
                 )
+                entries.append((raw_path, options, canonical))
+            else:
+                concrete, err = await self._expand_glob_path(raw_path, options)
+                if err is not None:
+                    entries.append((raw_path, options, err))
+                else:
+                    for path_str, opts in concrete:
+                        canonical = str(
+                            Path(str(kaos_path_from_user_input(path_str))).resolve()
+                        )
+                        entries.append((path_str, opts, canonical))
+
+        # Deduplicate concrete files by canonical path, preserving order and the
+        # first options tuple. Error entries are kept as-is.
+        seen_canonical: set[str] = set()
+        deduped_entries: list[tuple[str, tuple[int, int, int, int], str | ToolError]] = []
+        for path_str, options, marker in entries:
+            if isinstance(marker, ToolError):
+                deduped_entries.append((path_str, options, marker))
+            elif marker not in seen_canonical:
+                seen_canonical.add(marker)
+                deduped_entries.append((path_str, options, marker))
+
+        file_count = sum(
+            1 for _, _, marker in deduped_entries if not isinstance(marker, ToolError)
+        )
+        if file_count > MAX_FILES:
+            return ToolError(
+                message=f"Cannot read more than {MAX_FILES} files in one call.",
+                brief="Too many files",
+            )
 
         results: list[ToolReturnValue] = []
+        display_paths: list[str] = []
         success_count = 0
         error_count = 0
-        for raw_path, (line_offset, n_lines, max_char, char_offset) in zip(
-            deduped_paths, deduped_options
-        ):
-            result = await self._read_single_file(
-                raw_path, line_offset, n_lines, char_offset, max_char
-            )
-            results.append(result)
-            if result.is_error:
+        for path_str, options, marker in deduped_entries:
+            if isinstance(marker, ToolError):
+                result = marker
                 error_count += 1
             else:
-                success_count += 1
+                line_offset, n_lines, max_char, char_offset = options
+                result = await self._read_single_file(
+                    path_str, line_offset, n_lines, char_offset, max_char
+                )
+                if result.is_error:
+                    error_count += 1
+                else:
+                    success_count += 1
+            display_paths.append(path_str.replace("\\", "/"))
+            results.append(result)
 
         # Single-file reads keep the original output/message format for backward compatibility.
-        if len(deduped_paths) == 1:
+        if len(deduped_entries) == 1:
             return results[0]
 
         if success_count == 0:
@@ -237,14 +424,13 @@ class ReadFile(CallableTool2[Params]):
             )
 
         parts: list[str] = []
-        for idx, (raw_path, result) in enumerate(zip(deduped_paths, results)):
-            display_path = raw_path.replace("\\", "/")
+        for idx, (display_path, result) in enumerate(zip(display_paths, results)):
             parts.append(f"======== {display_path} ========")
             if result.is_error:
                 parts.append(result.message)
             else:
                 parts.append(result.output)
-            if idx < len(deduped_paths) - 1:
+            if idx < len(deduped_entries) - 1:
                 parts.append("")
         final_output = "\n".join(parts)
 
