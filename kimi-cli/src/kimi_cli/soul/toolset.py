@@ -65,10 +65,8 @@ if TYPE_CHECKING:
 current_tool_call = ContextVar[ToolCall | None]("current_tool_call", default=None)
 
 _current_session_id: ContextVar[str] = ContextVar("_current_session_id", default="")
-_temp_idx = 0
 print_tool_func = print
 
-_temp_folder: Path = Path.home() / ".kimi" / "logs"
 
 _DEFAULT_TOOL_OUTPUT_MAX_BYTES = 128 << 10  # 128 KiB fallback
 _TOOL_OUTPUT_BYTES_PER_TOKEN = 4  # conservative UTF-8 bytes/token estimate
@@ -77,17 +75,44 @@ _TOOL_OUTPUT_REMAINING_FRACTION = 0.9  # must stay strictly below remaining cont
 _TOOL_OUTPUT_ABS_MAX_BYTES = 1 << 20  # 1 MiB hard ceiling
 
 
-def _export_to_temp_file(content: str, ext: str = ".log") -> str:
-    global _temp_idx
-    """Export content to a temporary file and return the file path."""
-    id = _temp_idx
-    _temp_idx += 1
-    _temp_folder.mkdir(parents=True, exist_ok=True)
-    name = str(_temp_folder / (str(id) + ext))
-    # Append content if key exists, otherwise overwrite/create
-    with open(name, "w", encoding="utf-8") as f:
-        f.write(content)
-    return name
+def _part_byte_size(part: ContentPart) -> int:
+    """Return the byte size of a ContentPart for output budget checks."""
+    if isinstance(part, TextPart):
+        return len(part.text.encode("utf-8"))
+    if isinstance(part, ThinkPart):
+        return len(part.think.encode("utf-8"))
+    if isinstance(part, ImageURLPart):
+        return len(part.image_url.url.encode("utf-8"))
+    if isinstance(part, AudioURLPart):
+        return len(part.audio_url.url.encode("utf-8"))
+    if isinstance(part, VideoURLPart):
+        return len(part.video_url.url.encode("utf-8"))
+    return 0
+
+
+def _truncate_content_parts(parts: list[ContentPart], max_bytes: int) -> list[ContentPart]:
+    """Return a prefix of ``parts`` whose total byte size does not exceed ``max_bytes``."""
+    truncated: list[ContentPart] = []
+    used = 0
+    for part in parts:
+        size = _part_byte_size(part)
+        if used + size <= max_bytes:
+            truncated.append(part)
+            used += size
+            continue
+        room = max_bytes - used
+        if room <= 0:
+            break
+        if isinstance(part, TextPart):
+            piece = part.text.encode("utf-8")[:room].decode("utf-8", errors="ignore")
+            if piece:
+                truncated.append(TextPart(text=piece))
+        elif isinstance(part, ThinkPart):
+            piece = part.think.encode("utf-8")[:room].decode("utf-8", errors="ignore")
+            if piece:
+                truncated.append(ThinkPart(think=piece))
+        break
+    return truncated
 
 
 def set_session_id(sid: str) -> None:
@@ -526,54 +551,31 @@ class KimiToolset:
                         ret.output = sanitized_parts
                     max_bytes = self._get_max_output_bytes()
                     if isinstance(ret.output, str):
-                        len_bytes = len(ret.output.encode("utf-8"))
-                        if len_bytes > max_bytes:
-                            temp_file = _export_to_temp_file(ret.output)
-                            ret.output = (
-                                f"Output too large ({len_bytes} bytes), exported to `{temp_file}`"
+                        output_bytes = ret.output.encode("utf-8")
+                        if len(output_bytes) > max_bytes:
+                            ret = ToolError(
+                                message=(
+                                    f"Tool output exceeded the maximum allowed size "
+                                    f"({len(output_bytes)} bytes; limit {max_bytes} bytes). "
+                                    f"The result has been truncated."
+                                ),
+                                brief="Output too large",
+                                output=output_bytes[:max_bytes].decode("utf-8", errors="ignore"),
                             )
                     else:
                         # Handle list[ContentPart] or single ContentPart
                         parts = ret.output if isinstance(ret.output, list) else [ret.output]
-                        total_bytes = 0
-                        for part in parts:
-                            if isinstance(part, TextPart):
-                                total_bytes += len(part.text.encode("utf-8"))
-                            elif isinstance(part, ThinkPart):
-                                total_bytes += len(part.think.encode("utf-8"))
-                            elif isinstance(part, ImageURLPart):
-                                total_bytes += len(part.image_url.url.encode("utf-8"))
-                            elif isinstance(part, AudioURLPart):
-                                total_bytes += len(part.audio_url.url.encode("utf-8"))
-                            elif isinstance(part, VideoURLPart):
-                                total_bytes += len(part.video_url.url.encode("utf-8"))
+                        total_bytes = sum(_part_byte_size(p) for p in parts)
                         if total_bytes > max_bytes:
-                            lines: list[str] = []
-                            for part in parts:
-                                if isinstance(part, TextPart):
-                                    lines.append(part.text)
-                                elif isinstance(part, ThinkPart):
-                                    lines.append(f"<thinking>\n{part.think}\n</thinking>")
-                                elif isinstance(part, ImageURLPart):
-                                    lines.append("[image]")
-                                elif isinstance(part, AudioURLPart):
-                                    lines.append("[audio]")
-                                elif isinstance(part, VideoURLPart):
-                                    lines.append("[video]")
-                                else:
-                                    lines.append(f"[{part.type}]")
-                            output_str = "\n".join(lines)
-                            temp_file = _export_to_temp_file(output_str)
-                            msg = TextPart(
-                                text=(
-                                    f"Output too large ({total_bytes} bytes), "
-                                    f"exported to `{temp_file}`"
-                                )
+                            ret = ToolError(
+                                message=(
+                                    f"Tool output exceeded the maximum allowed size "
+                                    f"({total_bytes} bytes; limit {max_bytes} bytes). "
+                                    f"The result has been truncated."
+                                ),
+                                brief="Output too large",
+                                output=_truncate_content_parts(parts, max_bytes),
                             )
-                            if isinstance(ret.output, list):
-                                ret.output = [msg]
-                            else:
-                                ret.output = msg.text
                 except Exception as e:
                     tool_elapsed = time.monotonic() - t0
                     logger.exception(

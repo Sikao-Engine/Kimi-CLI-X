@@ -5,14 +5,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from pathlib import Path
-
-from kosong.tooling import CallableTool2, ToolOk, ToolReturnValue
+from kosong.tooling import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from kosong.tooling.error import ToolNotFoundError as KosongToolNotFoundError
 from pydantic import BaseModel
 
 from kimi_cli.soul.toolset import KimiToolset
-from kimi_cli.wire.types import ToolCall, ToolResult
+from kimi_cli.wire.types import TextPart, ToolCall, ToolResult
 
 
 class DummyParams(BaseModel):
@@ -542,8 +540,8 @@ def test_set_context_token_provider_overrides_provider():
     assert ts._get_max_output_bytes() == 3_859
 
 
-async def test_oversized_string_output_is_spilled():
-    """A string tool output above the dynamic limit is exported to a temp file."""
+async def test_oversized_string_output_is_truncated():
+    """A string tool output above the dynamic limit is truncated and returned as an error."""
     ts = KimiToolset()  # fallback 128 KiB budget
     ts.add(_EchoTool())
 
@@ -559,13 +557,14 @@ async def test_oversized_string_output_is_spilled():
     result = ts.handle(tool_call)
     assert isinstance(result, asyncio.Task)
     tr = await result
+    assert isinstance(tr.return_value, ToolError)
     output = tr.return_value.output
     assert isinstance(output, str)
-    assert output.startswith("Output too large (200000 bytes), exported to")
-
-    path = output.split("exported to `")[-1].rstrip("`")
-    assert Path(path).exists()
-    assert Path(path).read_text(encoding="utf-8") == large_output
+    assert len(output.encode("utf-8")) == ts._get_max_output_bytes()
+    assert "exceeded the maximum allowed size" in tr.return_value.message
+    assert "truncated" in tr.return_value.message.lower()
+    # The truncated output is a prefix of the original content.
+    assert large_output.startswith(output)
 
 
 async def test_small_string_output_is_returned_normally():
@@ -585,3 +584,38 @@ async def test_small_string_output_is_returned_normally():
     assert isinstance(result, asyncio.Task)
     tr = await result
     assert tr.return_value.output == small_output
+
+
+class _PartEchoTool(CallableTool2[DummyParams]):
+    name: str = "PartEchoTool"
+    description: str = "Echoes the input value as a TextPart list"
+    params: type[DummyParams] = DummyParams
+
+    async def __call__(self, params: DummyParams) -> ToolReturnValue:
+        return ToolOk(output=[TextPart(text=params.value)])
+
+
+async def test_oversized_content_part_output_is_truncated():
+    """A ContentPart tool output above the dynamic limit is truncated and returned as an error."""
+    ts = KimiToolset()  # fallback 128 KiB budget
+    ts.add(_PartEchoTool())
+
+    large_output = "".join(chr(65 + i % 26) for i in range(200_000))
+    tool_call = ToolCall(
+        id="tc-large-parts",
+        function=ToolCall.FunctionBody(
+            name="PartEchoTool",
+            arguments=json.dumps({"value": large_output}),
+        ),
+    )
+    result = ts.handle(tool_call)
+    assert isinstance(result, asyncio.Task)
+    tr = await result
+    assert isinstance(tr.return_value, ToolError)
+    output = tr.return_value.output
+    assert isinstance(output, list)
+    assert len(output) == 1
+    assert isinstance(output[0], TextPart)
+    assert len(output[0].text.encode("utf-8")) == ts._get_max_output_bytes()
+    assert "exceeded the maximum allowed size" in tr.return_value.message
+    assert large_output.startswith(output[0].text)
