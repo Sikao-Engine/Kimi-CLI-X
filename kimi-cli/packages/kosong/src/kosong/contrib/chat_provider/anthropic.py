@@ -188,34 +188,25 @@ def _is_opus_4_7(model: str) -> bool:
     return False
 
 
-def _supported_efforts(model: str) -> frozenset["ThinkingEffort"]:
-    """Effort levels accepted by ``output_config.effort`` for the given model.
-
-    Per Anthropic docs:
-      - xhigh: Opus 4.7 only
-      - max:   Mythos, Opus 4.7, Opus 4.6, Sonnet 4.6 (and future adaptive models)
-      - low/medium/high: all models with effort support (including Opus 4.5+)
-    """
-    if _is_opus_4_7(model):
-        return frozenset({"low", "medium", "high", "xhigh", "max"})
-    if _supports_adaptive_thinking(model):
-        # 4.6 family / Mythos / future adaptive models: support max but not xhigh
-        return frozenset({"low", "medium", "high", "max"})
-    # Pre-4.6 models: capped at high
-    return frozenset({"low", "medium", "high"})
-
-
-def _clamp_effort(effort: "ThinkingEffort", model: str) -> "ThinkingEffort":
+def _clamp_effort(
+    effort: "ThinkingEffort",
+    supported_efforts: frozenset["ThinkingEffort"],
+) -> "ThinkingEffort":
     """Clamp an effort level to the highest one supported by the model.
 
-    Anything the model doesn't support falls back to ``high`` — the
-    universally available ceiling. ``off`` is passed through unchanged as
-    it represents "disable thinking" rather than an effort rank.
+    ``off`` is passed through unchanged as it represents "disable thinking"
+    rather than an effort rank. If the requested level is supported it passes
+    through unchanged; otherwise the highest supported non-off level is chosen,
+    falling back to ``high`` when nothing else is available.
     """
     if effort == "off":
         return effort
-    if effort in _supported_efforts(model):
+    if effort in supported_efforts:
         return effort
+    # Fall back to the highest supported non-off level.
+    for candidate in ("max", "xhigh", "high", "medium", "low"):
+        if candidate in supported_efforts:
+            return candidate  # type: ignore[return-value]
     return "high"
 
 
@@ -269,6 +260,10 @@ class Anthropic:
         beta_features: list[BetaFeatures] | None
         extra_headers: Mapping[str, str] | None
 
+    _DEFAULT_SUPPORTED_EFFORTS: frozenset["ThinkingEffort"] = frozenset(
+        {"low", "medium", "high", "xhigh", "max"}
+    )
+
     def __init__(
         self,
         *,
@@ -281,10 +276,16 @@ class Anthropic:
         # Must provide a max_tokens. Can be overridden by .with_generation_kwargs()
         default_max_tokens: int,
         metadata: MetadataParam | None = None,
+        supported_efforts: set[ThinkingEffort] | None = None,
         **client_kwargs: Any,
     ):
         self._model = model
         self._stream = stream
+        self._supported_efforts = (
+            frozenset(supported_efforts)
+            if supported_efforts is not None
+            else self._DEFAULT_SUPPORTED_EFFORTS
+        )
         # Provide our own httpx.AsyncClient so the Anthropic SDK does not create
         # its default ``AsyncHttpxClientWrapper``. That wrapper's ``__del__``
         # schedules ``self.aclose()`` as a task on the running loop; on
@@ -432,7 +433,7 @@ class Anthropic:
         # Clamp to whatever the model actually accepts. xhigh/max fall back
         # to high on models that don't support them; low/medium/high pass
         # through; max passes through on 4.6-family and newer.
-        effective = _clamp_effort(effort, self._model)
+        effective = _clamp_effort(effort, self._supported_efforts)
         # SDK 0.78 OutputConfigParam TypedDict lists only low/medium/high/max.
         # `xhigh` is valid on Opus 4.7 per the API docs but not yet typed.
         output_config: OutputConfigParam = {"effort": effective}  # type: ignore[typeddict-item]
@@ -465,7 +466,7 @@ class Anthropic:
         # effort parameter (e.g. Opus 4.5) get `output_config` emitted; other
         # pre-4.6 models (Sonnet 4, Sonnet 4.5, Haiku 4.5, Claude 3.x) omit it
         # to avoid 400 validation errors on models that don't accept it.
-        budgets: dict[str, int] = {"low": 1024, "medium": 4096, "high": 32_000}
+        budgets: dict[str, int] = {"low": 1024, "medium": 4096, "high": 32_000, "xhigh": 64_000, "max": 128_000}
         kwargs: dict[str, Any] = {
             "thinking": {"type": "enabled", "budget_tokens": budgets[effective]},
         }

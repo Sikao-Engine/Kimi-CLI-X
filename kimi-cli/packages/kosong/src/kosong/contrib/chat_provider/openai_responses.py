@@ -41,6 +41,7 @@ from kosong.chat_provider.openai_common import (
     CommonGenerationKwargs,
     OpenAICompatibleProviderMixin,
     apply_generation_kwargs,
+    clamp_thinking_effort,
     convert_error,
     reasoning_effort_to_thinking_effort,
     thinking_effort_to_reasoning_effort,
@@ -121,6 +122,10 @@ class OpenAIResponses(OpenAICompatibleProviderMixin):
         top_p: float | None
         user: str | None
 
+    _DEFAULT_SUPPORTED_EFFORTS: frozenset[ThinkingEffort] = frozenset(
+        {"low", "medium", "high", "xhigh", "max"}
+    )
+
     def __init__(
         self,
         *,
@@ -129,11 +134,17 @@ class OpenAIResponses(OpenAICompatibleProviderMixin):
         base_url: str | None = None,
         stream: bool = True,
         tool_message_conversion: ToolMessageConversion | None = None,
+        supported_efforts: set[ThinkingEffort] | None = None,
         **client_kwargs: Any,
     ):
         self._init_openai_client(api_key=api_key, base_url=base_url, client_kwargs=client_kwargs)
         self._model = model
         self._stream = stream
+        self._supported_efforts = (
+            frozenset(supported_efforts)
+            if supported_efforts is not None
+            else self._DEFAULT_SUPPORTED_EFFORTS
+        )
         self._tool_message_conversion: ToolMessageConversion | None = tool_message_conversion
         self._generation_kwargs: OpenAIResponses.GenerationKwargs = {}
 
@@ -189,7 +200,9 @@ class OpenAIResponses(OpenAICompatibleProviderMixin):
             raise convert_error(e) from e
 
     def with_thinking(self, effort: ThinkingEffort) -> Self:
-        reasoning_effort = thinking_effort_to_reasoning_effort(effort)
+        reasoning_effort = thinking_effort_to_reasoning_effort(
+            clamp_thinking_effort(effort, self._supported_efforts)
+        )
         return self.with_generation_kwargs(reasoning_effort=reasoning_effort)
 
     def with_parallel_tool_calls(self, enabled: bool = True) -> Self:

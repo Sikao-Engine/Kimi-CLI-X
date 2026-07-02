@@ -342,6 +342,44 @@ async def test_openai_legacy_with_thinking():
         assert body["reasoning_effort"] == snapshot("high")
 
 
+async def test_openai_legacy_supported_efforts_clamps_max():
+    """A model that does not accept ``max`` must clamp it to ``high``."""
+    with respx.mock(base_url="https://api.openai.com") as mock:
+        mock.post("/v1/chat/completions").mock(
+            return_value=Response(200, json=make_chat_completion_response())
+        )
+        provider = OpenAILegacy(
+            model="gpt-4.1",
+            api_key="test-key",
+            stream=False,
+            supported_efforts={"low", "medium", "high"},
+        ).with_thinking("max")
+        stream = await provider.generate("", [], [Message(role="user", content="Think")])
+        async for _ in stream:
+            pass
+        body = json.loads(mock.calls.last.request.content.decode())
+        assert body["reasoning_effort"] == snapshot("high")
+
+
+async def test_openai_legacy_supported_efforts_passes_xhigh():
+    """A model configured with the full effort set must pass ``xhigh`` through."""
+    with respx.mock(base_url="https://api.openai.com") as mock:
+        mock.post("/v1/chat/completions").mock(
+            return_value=Response(200, json=make_chat_completion_response())
+        )
+        provider = OpenAILegacy(
+            model="gpt-5.1-codex-max",
+            api_key="test-key",
+            stream=False,
+            supported_efforts={"low", "medium", "high", "xhigh", "max"},
+        ).with_thinking("xhigh")
+        stream = await provider.generate("", [], [Message(role="user", content="Think")])
+        async for _ in stream:
+            pass
+        body = json.loads(mock.calls.last.request.content.decode())
+        assert body["reasoning_effort"] == snapshot("xhigh")
+
+
 async def test_openai_legacy_auto_reasoning_effort_when_history_has_think_part():
     """When reasoning_effort is not set but history contains ThinkPart and reasoning_key is
     configured, reasoning_effort should be auto-set to avoid server validation errors.

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 import orjson
 import tomlkit
+from kosong.chat_provider import ThinkingEffort
 from pydantic import (
+    AfterValidator,
     AliasChoices,
     BaseModel,
     Field,
@@ -86,6 +88,13 @@ class LLMProvider(BaseModel):
         return v.get_secret_value()
 
 
+def _validate_supported_efforts(v: set[ThinkingEffort]) -> set[ThinkingEffort]:
+    """Reject the special ``off`` value; it disables thinking rather than selecting an effort rank."""
+    if "off" in v:
+        raise ValueError("'off' is not a valid supported_efforts value")
+    return v
+
+
 class LLMModel(BaseModel):
     """LLM model configuration."""
 
@@ -99,7 +108,17 @@ class LLMModel(BaseModel):
     """Model capabilities"""
     display_name: str | None = None
     """Human-readable model name (sourced from the provider's models API when available)"""
-
+    supported_efforts: Annotated[
+        set[ThinkingEffort],
+        AfterValidator(_validate_supported_efforts),
+    ] = Field(
+        default_factory=lambda: {"low", "medium", "high", "xhigh", "max"},
+        description=(
+            "Thinking effort levels this model accepts. "
+            "Defaults to the full set. "
+            "The special value ``\"off\"`` is not an effort rank and must not be included."
+        ),
+    )
 
 class LoopControl(BaseModel):
     """Agent loop control configuration."""

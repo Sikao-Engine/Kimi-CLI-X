@@ -670,8 +670,8 @@ async def test_anthropic_haiku_45_legacy_no_output_config():
 
 
 async def test_anthropic_opus_45_legacy_xhigh_clamps_to_high():
-    """Opus 4.5 is explicitly listed as supporting effort alongside legacy
-    budget_tokens thinking. xhigh clamps to high for this model.
+    """Opus 4.5 supports effort but not xhigh; explicit supported_efforts clamps
+    xhigh down to high while still emitting output_config.
     """
     with respx.mock(base_url="https://api.anthropic.com") as mock:
         mock.post("/v1/messages").mock(return_value=Response(200, json=make_anthropic_response()))
@@ -680,6 +680,7 @@ async def test_anthropic_opus_45_legacy_xhigh_clamps_to_high():
             api_key="test-key",
             default_max_tokens=1024,
             stream=False,
+            supported_efforts={"low", "medium", "high"},
         ).with_thinking("xhigh")
         stream = await provider.generate("", [], [Message(role="user", content="Think")])
         async for _ in stream:
@@ -741,7 +742,9 @@ async def test_anthropic_opus_46_max():
 
 
 async def test_anthropic_opus_46_xhigh_clamps_to_high():
-    """Opus 4.6 doesn't support xhigh (Opus 4.7-only) — must clamp to high."""
+    """Opus 4.6 doesn't support xhigh (Opus 4.7-only) — supported_efforts clamps
+    xhigh down to high.
+    """
     with respx.mock(base_url="https://api.anthropic.com") as mock:
         mock.post("/v1/messages").mock(return_value=Response(200, json=make_anthropic_response()))
         provider = Anthropic(
@@ -749,6 +752,7 @@ async def test_anthropic_opus_46_xhigh_clamps_to_high():
             api_key="test-key",
             default_max_tokens=1024,
             stream=False,
+            supported_efforts={"low", "medium", "high"},
         ).with_thinking("xhigh")
         stream = await provider.generate("", [], [Message(role="user", content="Think")])
         async for _ in stream:
@@ -845,9 +849,48 @@ async def test_anthropic_opus_46_xhigh_property_reflects_clamped_value():
         api_key="test-key",
         default_max_tokens=1024,
         stream=False,
+        supported_efforts={"low", "medium", "high"},
     ).with_thinking("xhigh")
-    # xhigh clamped to high for 4.6
+    # xhigh clamped to high when not in supported_efforts
     assert provider.thinking_effort == "high"
+
+
+async def test_anthropic_supported_efforts_clamps_max_to_high():
+    """A model configured without ``max`` must clamp it to the highest supported
+    effort level.
+    """
+    with respx.mock(base_url="https://api.anthropic.com") as mock:
+        mock.post("/v1/messages").mock(return_value=Response(200, json=make_anthropic_response()))
+        provider = Anthropic(
+            model="claude-opus-4-7",
+            api_key="test-key",
+            default_max_tokens=1024,
+            stream=False,
+            supported_efforts={"low", "medium", "high"},
+        ).with_thinking("max")
+        stream = await provider.generate("", [], [Message(role="user", content="Think")])
+        async for _ in stream:
+            pass
+        body = json.loads(mock.calls.last.request.content.decode())
+        assert body["output_config"] == snapshot({"effort": "high"})
+
+
+async def test_anthropic_supported_efforts_passes_max():
+    """A model configured with the full effort set must pass ``max`` through."""
+    with respx.mock(base_url="https://api.anthropic.com") as mock:
+        mock.post("/v1/messages").mock(return_value=Response(200, json=make_anthropic_response()))
+        provider = Anthropic(
+            model="claude-opus-4-7",
+            api_key="test-key",
+            default_max_tokens=1024,
+            stream=False,
+            supported_efforts={"low", "medium", "high", "xhigh", "max"},
+        ).with_thinking("max")
+        stream = await provider.generate("", [], [Message(role="user", content="Think")])
+        async for _ in stream:
+            pass
+        body = json.loads(mock.calls.last.request.content.decode())
+        assert body["output_config"] == snapshot({"effort": "max"})
 
 
 async def test_anthropic_parallel_tool_results_merged_into_single_user_message():

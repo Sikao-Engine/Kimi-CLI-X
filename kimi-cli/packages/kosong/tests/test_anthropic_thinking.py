@@ -72,47 +72,34 @@ def test_supports_adaptive_thinking(model: str, expected: bool) -> None:
 
 
 @pytest.mark.parametrize(
-    "model,effort,expected",
+    "supported_efforts,effort,expected",
     [
-        # Opus 4.7: supports the full range including xhigh and max
-        ("claude-opus-4-7", "low", "low"),
-        ("claude-opus-4-7", "medium", "medium"),
-        ("claude-opus-4-7", "high", "high"),
-        ("claude-opus-4-7", "xhigh", "xhigh"),
-        ("claude-opus-4-7", "max", "max"),
-        ("claude-opus-4-7-20260301", "xhigh", "xhigh"),
-        # Opus 4.6: max supported, but xhigh clamps down to high
-        ("claude-opus-4-6", "max", "max"),
-        ("claude-opus-4-6", "xhigh", "high"),
-        ("claude-opus-4-6-20260205", "max", "max"),
-        # Sonnet 4.6: same policy as Opus 4.6
-        ("claude-sonnet-4-6", "max", "max"),
-        ("claude-sonnet-4-6", "xhigh", "high"),
-        # Mythos: max supported, xhigh clamps down (only Opus 4.7 has xhigh)
-        ("claude-mythos-preview", "max", "max"),
-        ("claude-mythos-preview", "xhigh", "high"),
-        # Pre-4.6 models: cap at high; xhigh and max both clamp down
-        ("claude-opus-4-5", "max", "high"),
-        ("claude-opus-4-5", "xhigh", "high"),
-        ("claude-opus-4-5", "high", "high"),
-        ("claude-sonnet-4-20250514", "max", "high"),
-        ("claude-sonnet-4-20250514", "xhigh", "high"),
-        ("claude-sonnet-4-5", "xhigh", "high"),
-        ("claude-haiku-4-5", "max", "high"),
-        # low/medium/high always pass through unchanged
-        ("claude-opus-4-7", "low", "low"),
-        ("claude-opus-4-6", "medium", "medium"),
-        ("claude-sonnet-4-20250514", "low", "low"),
-        # Future 4.8+ inherits Opus 4.7-like behavior only if name signals opus-4-7+
-        # 4.8 is not automatically assumed to support xhigh; only guaranteed max.
-        ("claude-opus-4-8", "xhigh", "high"),
-        ("claude-opus-4-8", "max", "max"),
-        ("claude-opus-5-0", "max", "max"),
-        ("claude-opus-5-0", "xhigh", "high"),
+        # Full effort set: every level passes through unchanged.
+        ({"low", "medium", "high", "xhigh", "max"}, "low", "low"),
+        ({"low", "medium", "high", "xhigh", "max"}, "medium", "medium"),
+        ({"low", "medium", "high", "xhigh", "max"}, "high", "high"),
+        ({"low", "medium", "high", "xhigh", "max"}, "xhigh", "xhigh"),
+        ({"low", "medium", "high", "xhigh", "max"}, "max", "max"),
+        # Cap at high: xhigh and max clamp down to high.
+        ({"low", "medium", "high"}, "max", "high"),
+        ({"low", "medium", "high"}, "xhigh", "high"),
+        ({"low", "medium", "high"}, "high", "high"),
+        # Cap at xhigh: max clamps down to xhigh.
+        ({"low", "medium", "high", "xhigh"}, "max", "xhigh"),
+        ({"low", "medium", "high", "xhigh"}, "xhigh", "xhigh"),
+        # low/medium/high always pass through unchanged.
+        ({"low", "medium", "high"}, "low", "low"),
+        ({"low", "medium"}, "medium", "medium"),
+        # Empty set: fall back to the safe universal ceiling.
+        (set(), "max", "high"),
+        (set(), "low", "high"),
+        # off disables thinking regardless of supported set.
+        ({"low", "medium", "high"}, "off", "off"),
+        (set(), "off", "off"),
     ],
 )
-def test_clamp_effort(model: str, effort: str, expected: str) -> None:
-    assert _clamp_effort(effort, model) == expected  # type: ignore[arg-type]
+def test_clamp_effort(supported_efforts: set[str], effort: str, expected: str) -> None:
+    assert _clamp_effort(effort, frozenset(supported_efforts)) == expected  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

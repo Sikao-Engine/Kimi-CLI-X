@@ -195,6 +195,7 @@ def create_llm(
                 reasoning_key=reasoning_key,
                 openai_settings=openai_settings,
                 default_headers=_kimi_default_headers(provider, oauth),
+                supported_efforts=model.supported_efforts,
             ).with_parallel_tool_calls(enabled=True)
         case "openai_responses":
             from kosong.contrib.chat_provider.openai_responses import OpenAIResponses
@@ -204,6 +205,7 @@ def create_llm(
                 base_url=provider.base_url,
                 api_key=resolved_api_key,
                 default_headers=_kimi_default_headers(provider, oauth),
+                supported_efforts=model.supported_efforts,
             ).with_parallel_tool_calls(enabled=True)
         case "anthropic":
             from kosong.contrib.chat_provider.anthropic import Anthropic
@@ -215,6 +217,7 @@ def create_llm(
                 default_max_tokens=50000,
                 metadata={"user_id": session_id} if session_id else None,
                 default_headers=_kimi_default_headers(provider, oauth),
+                supported_efforts=model.supported_efforts,
             ).with_parallel_tool_calls(enabled=True)
         case "google_genai" | "gemini":
             from kosong.contrib.chat_provider.google_genai import GoogleGenAI
@@ -281,7 +284,7 @@ def create_llm(
     # Apply thinking using the pre-computed capability/thinking decision so it
     # matches the temperature forced above for the kimi provider.
     if thinking_on:
-        chat_provider = chat_provider.with_thinking(thinking_effort if thinking_effort is not None else 'high')
+        chat_provider = chat_provider.with_thinking(thinking_effort if thinking_effort is not None else 'max')
     elif thinking is False:
         chat_provider = chat_provider.with_thinking("off")
     # If thinking is None and model doesn't always think, leave as-is (default behavior)

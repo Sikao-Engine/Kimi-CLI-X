@@ -204,6 +204,31 @@ def _classify_base_api_error(message: str) -> ChatProviderError:
     return ChatProviderError(f"Error: {message}")
 
 
+def clamp_thinking_effort(
+    effort: ThinkingEffort,
+    supported: set[ThinkingEffort] | None,
+) -> ThinkingEffort:
+    """Clamp a thinking effort to the highest level accepted by the model.
+
+    ``off`` is always returned unchanged because it disables thinking rather
+    than selecting an effort rank. When ``supported`` is ``None`` or includes
+    the requested effort, the effort passes through unchanged. Otherwise the
+    highest supported non-off level is chosen, falling back to ``high`` when
+    nothing else is available.
+    """
+    if effort == "off":
+        return effort
+    if supported is None:
+        return effort
+    if effort in supported:
+        return effort
+    # Fall back to the highest supported non-off level.
+    for candidate in ("max", "xhigh", "high", "medium", "low"):
+        if candidate in supported:
+            return candidate  # type: ignore[return-value]
+    return "high"
+
+
 def thinking_effort_to_reasoning_effort(effort: ThinkingEffort) -> ReasoningEffort:
     match effort:
         case "off":

@@ -23,6 +23,7 @@ from kosong.chat_provider.openai_common import (
     OpenAICompatibleProviderMixin,
     OpenAICompatibleStreamedMessage,
     apply_generation_kwargs,
+    clamp_thinking_effort,
     convert_error,
     extract_reasoning_from_content,
     reasoning_effort_to_thinking_effort,
@@ -79,6 +80,10 @@ class OpenAILegacy(OpenAICompatibleProviderMixin):
         stop: str | list[str] | None
         prompt_cache_key: str | None
 
+    _DEFAULT_SUPPORTED_EFFORTS: frozenset[ThinkingEffort] = frozenset(
+        {"low", "medium", "high", "xhigh", "max"}
+    )
+
     def __init__(
         self,
         *,
@@ -89,6 +94,7 @@ class OpenAILegacy(OpenAICompatibleProviderMixin):
         reasoning_key: str | None = None,
         openai_settings: dict[str, Any] | None = None,
         tool_message_conversion: ToolMessageConversion | None = None,
+        supported_efforts: set[ThinkingEffort] | None = None,
         **client_kwargs: Any,
     ):
         """
@@ -101,6 +107,9 @@ class OpenAILegacy(OpenAICompatibleProviderMixin):
         ``extra_body`` when ``reasoning_key`` is configured. It should be a dict with boolean
         flags for ``thinking``, ``reasoning`` and ``chat_template_kwargs``. When omitted, all
         three keys are included for backward compatibility.
+
+        ``supported_efforts`` restricts the thinking-effort levels this model accepts.
+        When omitted, all levels (``low`` through ``max``) are allowed.
         """
         self._init_openai_client(api_key=api_key, base_url=base_url, client_kwargs=client_kwargs)
         """The underlying `AsyncOpenAI` client."""
@@ -108,6 +117,11 @@ class OpenAILegacy(OpenAICompatibleProviderMixin):
         self.stream = stream
         self._reasoning_effort: ReasoningEffort | Omit = omit
         self._reasoning_key = reasoning_key
+        self._supported_efforts = (
+            frozenset(supported_efforts)
+            if supported_efforts is not None
+            else self._DEFAULT_SUPPORTED_EFFORTS
+        )
         self._openai_settings: dict[str, Any] = {
             "thinking": True,
             "reasoning": True,
@@ -197,7 +211,9 @@ class OpenAILegacy(OpenAICompatibleProviderMixin):
 
     def with_thinking(self, effort: ThinkingEffort) -> Self:
         new_self = copy.copy(self)
-        new_self._reasoning_effort = thinking_effort_to_reasoning_effort(effort)
+        new_self._reasoning_effort = thinking_effort_to_reasoning_effort(
+            clamp_thinking_effort(effort, self._supported_efforts)
+        )
         return new_self
 
     def with_parallel_tool_calls(self, enabled: bool = True) -> Self:

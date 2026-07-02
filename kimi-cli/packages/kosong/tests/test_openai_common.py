@@ -13,11 +13,42 @@ from kosong.chat_provider import (
     openai_common,
 )
 from kosong.chat_provider.openai_common import (
+    clamp_thinking_effort,
     convert_error,
     reasoning_effort_to_thinking_effort,
     thinking_effort_to_reasoning_effort,
 )
 from kosong.contrib.chat_provider.openai_legacy import OpenAILegacy
+
+
+class TestClampThinkingEffort:
+    """Clamp thinking effort to a model's supported set."""
+
+    @pytest.mark.parametrize(
+        "effort,supported,expected",
+        [
+            ("off", None, "off"),
+            ("off", {"low", "medium", "high"}, "off"),
+            ("low", None, "low"),
+            ("high", {"low", "medium", "high"}, "high"),
+            ("max", {"low", "medium", "high"}, "high"),
+            ("xhigh", {"low", "medium", "high"}, "high"),
+            ("max", {"low", "medium", "high", "xhigh", "max"}, "max"),
+            ("xhigh", {"low", "medium", "high", "xhigh", "max"}, "xhigh"),
+            ("max", {"low", "medium", "high", "xhigh"}, "xhigh"),
+            ("high", set(), "high"),
+        ],
+    )
+    def test_clamp_thinking_effort(
+        self, effort: str, supported: set[str] | None, expected: str
+    ) -> None:
+        assert (
+            clamp_thinking_effort(
+                effort,  # type: ignore[arg-type]
+                supported,  # type: ignore[arg-type]
+            )
+            == expected
+        )
 
 
 class TestThinkingEffortMapping:

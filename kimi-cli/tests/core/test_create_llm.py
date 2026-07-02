@@ -431,6 +431,111 @@ def _make_kimi_thinking_model() -> tuple[LLMProvider, LLMModel]:
     return provider, model
 
 
+def test_create_llm_default_thinking_effort_is_max_anthropic():
+    from kosong.contrib.chat_provider.anthropic import Anthropic
+
+    provider = LLMProvider(
+        type="anthropic",
+        base_url="https://api.anthropic.com",
+        api_key=SecretStr("test-key"),
+    )
+    model = LLMModel(
+        provider="anthropic",
+        model="claude-opus-4-7",
+        max_context_size=200000,
+        capabilities={"thinking"},
+    )
+
+    llm = create_llm(provider, model, thinking=True)
+    assert llm is not None
+    assert isinstance(llm.chat_provider, Anthropic)
+    assert llm.chat_provider.thinking_effort == "max"
+
+
+def test_create_llm_default_thinking_effort_is_max_openai_legacy():
+    from kosong.contrib.chat_provider.openai_legacy import OpenAILegacy
+
+    provider = LLMProvider(
+        type="openai_legacy",
+        base_url="https://api.openai.com/v1",
+        api_key=SecretStr("test-key"),
+    )
+    model = LLMModel(
+        provider="openai",
+        model="gpt-5.1-codex-max",
+        max_context_size=128000,
+        capabilities={"thinking"},
+    )
+
+    llm = create_llm(provider, model, thinking=True)
+    assert llm is not None
+    assert isinstance(llm.chat_provider, OpenAILegacy)
+    assert llm.chat_provider.thinking_effort == "xhigh"
+
+
+def test_create_llm_supported_efforts_clamps_xhigh():
+    from kosong.contrib.chat_provider.anthropic import Anthropic
+
+    provider = LLMProvider(
+        type="anthropic",
+        base_url="https://api.anthropic.com",
+        api_key=SecretStr("test-key"),
+    )
+    model = LLMModel(
+        provider="anthropic",
+        model="claude-opus-4-7",
+        max_context_size=200000,
+        capabilities={"thinking"},
+        supported_efforts={"low", "medium", "high"},
+    )
+
+    llm = create_llm(provider, model, thinking=True, thinking_effort="max")
+    assert llm is not None
+    assert isinstance(llm.chat_provider, Anthropic)
+    assert llm.chat_provider.thinking_effort == "high"
+
+
+def test_create_llm_supported_efforts_passes_max():
+    from kosong.contrib.chat_provider.anthropic import Anthropic
+    from kosong.contrib.chat_provider.openai_legacy import OpenAILegacy
+
+    anthropic_provider = LLMProvider(
+        type="anthropic",
+        base_url="https://api.anthropic.com",
+        api_key=SecretStr("test-key"),
+    )
+    anthropic_model = LLMModel(
+        provider="anthropic",
+        model="claude-opus-4-7",
+        max_context_size=200000,
+        capabilities={"thinking"},
+    )
+    anthropic_llm = create_llm(
+        anthropic_provider, anthropic_model, thinking=True, thinking_effort="max"
+    )
+    assert anthropic_llm is not None
+    assert isinstance(anthropic_llm.chat_provider, Anthropic)
+    assert anthropic_llm.chat_provider.thinking_effort == "max"
+
+    openai_provider = LLMProvider(
+        type="openai_legacy",
+        base_url="https://api.openai.com/v1",
+        api_key=SecretStr("test-key"),
+    )
+    openai_model = LLMModel(
+        provider="openai",
+        model="gpt-5.1-codex-max",
+        max_context_size=128000,
+        capabilities={"thinking"},
+    )
+    openai_llm = create_llm(
+        openai_provider, openai_model, thinking=True, thinking_effort="max"
+    )
+    assert openai_llm is not None
+    assert isinstance(openai_llm.chat_provider, OpenAILegacy)
+    assert openai_llm.chat_provider.thinking_effort == "xhigh"
+
+
 def _make_kimi_plain_model() -> tuple[LLMProvider, LLMModel]:
     """Helper: build a kimi provider + non-thinking model pair."""
     provider = LLMProvider(

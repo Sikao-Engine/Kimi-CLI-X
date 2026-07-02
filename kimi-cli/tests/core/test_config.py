@@ -33,7 +33,7 @@ def test_default_config_dump():
                 "max_steps_per_turn": 5000,
                 "max_retries_per_step": 3,
                 "max_ralph_iterations": 0,
-                "reserved_context_size": 50000,
+                "reserved_context_size": 75000,
                 "compaction_trigger_ratio": 0.75,
                 "max_system_prompt_tokens": 4000,
                 "max_preserved_messages": 2,
@@ -42,7 +42,7 @@ def test_default_config_dump():
                 "compact_reminder_enabled": True,
                 "compact_reminder_threshold": 0.7,
                 "done_reminder_enabled": True,
-                "done_reminder_cooldown_steps": 5,
+                "done_reminder_cooldown_steps": 10,
                 "auto_retrieve_history": True,
                 "auto_retrieve_history_threshold": 5.0,
                 "auto_retrieve_working_memory": True,
@@ -157,3 +157,31 @@ def test_load_config_compaction_trigger_ratio_too_low():
 def test_load_config_compaction_trigger_ratio_too_high():
     with pytest.raises(ConfigError, match="compaction_trigger_ratio"):
         load_config_from_string('{"loop_control": {"compaction_trigger_ratio": 1.0}}')
+
+
+def test_load_config_supported_efforts():
+    config = load_config_from_string(
+        '{"models": {"m": {"provider": "p", "model": "m", "max_context_size": 1000, "supported_efforts": ["low", "high"]}}, "providers": {"p": {"type": "anthropic", "base_url": "https://example.com", "api_key": "k"}}}'
+    )
+    assert config.models["m"].supported_efforts == {"low", "high"}
+
+
+def test_load_config_supported_efforts_defaults_to_full_set():
+    config = load_config_from_string(
+        '{"models": {"m": {"provider": "p", "model": "m", "max_context_size": 1000}}, "providers": {"p": {"type": "anthropic", "base_url": "https://example.com", "api_key": "k"}}}'
+    )
+    assert config.models["m"].supported_efforts == {"low", "medium", "high", "xhigh", "max"}
+
+
+def test_load_config_invalid_supported_efforts():
+    with pytest.raises(ConfigError, match="supported_efforts"):
+        load_config_from_string(
+            '{"models": {"m": {"provider": "p", "model": "m", "max_context_size": 1000, "supported_efforts": ["low", "invalid"]}}, "providers": {"p": {"type": "anthropic", "base_url": "https://example.com", "api_key": "k"}}}'
+        )
+
+
+def test_load_config_supported_efforts_rejects_off():
+    with pytest.raises(ConfigError, match="supported_efforts|off"):
+        load_config_from_string(
+            '{"models": {"m": {"provider": "p", "model": "m", "max_context_size": 1000, "supported_efforts": ["low", "off"]}}, "providers": {"p": {"type": "anthropic", "base_url": "https://example.com", "api_key": "k"}}}'
+        )
